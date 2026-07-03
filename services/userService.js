@@ -76,7 +76,6 @@ async function ensureUser(from) {
     .from('users')
     .insert({
       telegram_id: telegramId,
-      full_name: buildFullName(from),
       current_month: getMonthKey()
     })
     .select('*')

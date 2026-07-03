@@ -196,6 +196,14 @@ function formatUserName(user, from = {}) {
   return user?.full_name || userService.buildFullName(from) || 'Nomaʼlum';
 }
 
+function hasFullName(user) {
+  return Boolean(String(user?.full_name || '').trim());
+}
+
+function getDisplayName(user) {
+  return String(user?.full_name || '').trim() || "do'stim";
+}
+
 function formatDateTime(date = new Date()) {
   return new Intl.DateTimeFormat('uz-UZ', {
     timeZone: process.env.BOT_TIMEZONE || 'Asia/Tashkent',
@@ -354,6 +362,18 @@ function buildSalarySavedText(salary) {
   ].join('\n');
 }
 
+function buildNamePromptText() {
+  return "Assalomu alaykum! Men sizning shaxsiy moliyaviy yordamchingizman. Avval ismingizni bilsam bo'ladimi?";
+}
+
+function buildSalaryPromptText(name) {
+  return `Xush kelibsiz, ${name}! Endi oylik maoshingizni kiriting (so'mda). Masalan: 5000000`;
+}
+
+function buildStartWelcomeText(user) {
+  return `Xush kelibsiz, ${getDisplayName(user)}! Xarajatingizni yozing yoki pastdagi tugmalardan foydalaning.`;
+}
+
 function buildLimitReachedText(dailyLimit) {
   return [
     `Bugungi bepul limitingiz tugadi (${dailyLimit} ta). Ko'proq xarajat kiritish uchun premium sotib oling:`,
@@ -479,12 +499,23 @@ async function handleStart(bot, msg) {
 
   try {
     const user = await userService.ensureUser(msg.from);
+    const telegramId = getTelegramId(msg.from);
 
-    if (Number(user.current_salary || 0) <= 0) {
-      setUserState(getTelegramId(msg.from), 'awaiting_salary');
+    if (!hasFullName(user)) {
+      setUserState(telegramId, 'awaiting_start_name');
       await bot.sendMessage(
         chatId,
-        "Assalomu alaykum! Oylik maoshingizni kiriting. Masalan: 5000000",
+        buildNamePromptText(),
+        MAIN_KEYBOARD
+      );
+      return;
+    }
+
+    if (Number(user.current_salary || 0) <= 0) {
+      setUserState(telegramId, 'awaiting_salary');
+      await bot.sendMessage(
+        chatId,
+        buildSalaryPromptText(getDisplayName(user)),
         MAIN_KEYBOARD
       );
       return;
@@ -492,7 +523,7 @@ async function handleStart(bot, msg) {
 
     await bot.sendMessage(
       chatId,
-      "Xush kelibsiz! Xarajatni oddiy matn bilan yozing. Masalan: 25000 nonga",
+      buildStartWelcomeText(user),
       MAIN_KEYBOARD
     );
   } catch (error) {
@@ -651,6 +682,12 @@ async function handleVoice(bot, msg) {
   try {
     let user = await userService.ensureUser(msg.from);
     user = await rolloverUserMonth(bot, user);
+
+    if (!hasFullName(user)) {
+      setUserState(telegramId, 'awaiting_start_name');
+      await bot.sendMessage(chatId, buildNamePromptText(), MAIN_KEYBOARD);
+      return;
+    }
 
     if (Number(user.current_salary || 0) <= 0) {
       setUserState(telegramId, 'awaiting_salary');
@@ -965,6 +1002,18 @@ async function handleMessage(bot, msg) {
     const state = getUserState(telegramId);
     const normalizedText = text.trim();
 
+    if (state?.type === 'awaiting_start_name') {
+      if (!normalizedText) {
+        await bot.sendMessage(chatId, buildNamePromptText(), MAIN_KEYBOARD);
+        return;
+      }
+
+      const updatedUser = await userService.updateFullName(user.id, normalizedText);
+      setUserState(telegramId, 'awaiting_salary');
+      await bot.sendMessage(chatId, buildSalaryPromptText(updatedUser.full_name), MAIN_KEYBOARD);
+      return;
+    }
+
     if (state?.type === 'awaiting_salary' || state?.type === 'awaiting_new_salary') {
       await handleSalaryInput(bot, chatId, telegramId, user, normalizedText);
       return;
@@ -974,6 +1023,12 @@ async function handleMessage(bot, msg) {
       const updatedUser = await userService.updateFullName(user.id, normalizedText);
       clearUserState(telegramId);
       await bot.sendMessage(chatId, `Ism yangilandi: ${updatedUser.full_name}`, MAIN_KEYBOARD);
+      return;
+    }
+
+    if (!hasFullName(user)) {
+      setUserState(telegramId, 'awaiting_start_name');
+      await bot.sendMessage(chatId, buildNamePromptText(), MAIN_KEYBOARD);
       return;
     }
 
