@@ -473,6 +473,49 @@ function buildStatsText(users, todayExpenseCounts, todayVoiceExpenseCounts, toda
   ].join('\n');
 }
 
+function formatExpenseLabel(expense) {
+  const note = String(expense?.note || '').trim();
+  const label = note || expense?.category || 'Xarajat';
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function buildSkippedExpensesText(skippedCount) {
+  return skippedCount > 0
+    ? `Limit tugagani sababli ${skippedCount} ta xarajat saqlanmadi.`
+    : null;
+}
+
+function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
+  const skippedText = buildSkippedExpensesText(skippedCount);
+
+  if (savedExpenses.length === 1) {
+    const savedExpense = savedExpenses[0];
+    return [
+      `✅ Saqlandi: ${formatMoney(savedExpense.amount)}`,
+      `Kategoriya: ${savedExpense.category}`,
+      `Qolgan balans: ${formatMoney(balance)}`,
+      skippedText ? '' : null,
+      skippedText
+    ].filter((line) => line !== null).join('\n');
+  }
+
+  const totalSaved = savedExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const expenseLines = savedExpenses.map((expense, index) => (
+    `${index + 1}. ${formatExpenseLabel(expense)} — ${formatMoney(expense.amount)} (${expense.category})`
+  ));
+
+  return [
+    `✅ ${savedExpenses.length} ta xarajat saqlandi:`,
+    '',
+    expenseLines.join('\n'),
+    '',
+    `Jami: ${formatMoney(totalSaved)}`,
+    `Qolgan balans: ${formatMoney(balance)}`,
+    skippedText ? '' : null,
+    skippedText
+  ].filter((line) => line !== null).join('\n');
+}
+
 async function sendLongMessage(bot, chatId, text) {
   const chunks = [];
   const maxLength = 3800;
@@ -626,20 +669,42 @@ async function handleExpenseText(bot, chatId, user, text) {
       return;
     }
 
-    // Erkin matn Gemini orqali strukturali xarajatga aylantiriladi.
-    const parsedExpense = await categorizeExpense(cleanText);
+    // Erkin matn Gemini orqali bir yoki bir nechta strukturali xarajatga aylantiriladi.
+    const parsedExpenses = await categorizeExpense(cleanText);
+    const expenses = (Array.isArray(parsedExpenses) ? parsedExpenses : [parsedExpenses]).filter(Boolean);
+
+    if (!expenses.length) {
+      await bot.sendMessage(chatId, "Tushunmadim, qaytadan yozing. Masalan: 25000 nonga", MAIN_KEYBOARD);
+      return;
+    }
+
+    const remainingSlots = Math.max(0, dailyLimit - todayExpenseCount);
+    const expensesToSave = expenses.slice(0, remainingSlots);
+    const skippedCount = expenses.length - expensesToSave.length;
+
+    if (!expensesToSave.length) {
+      await bot.sendMessage(
+        chatId,
+        buildLimitReachedText(dailyLimit),
+        getPaymentStartMarkup()
+      );
+      return;
+    }
+
     const month = user.current_month || userService.getMonthKey();
-    const savedExpense = await expenseService.createExpense(user.id, parsedExpense, month);
+    const savedExpenses = [];
+
+    for (const expense of expensesToSave) {
+      const savedExpense = await expenseService.createExpense(user.id, expense, month);
+      savedExpenses.push(savedExpense);
+    }
+
     const summary = await expenseService.getMonthlySummary(user.id, month);
     const balance = Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
 
     await bot.sendMessage(
       chatId,
-      [
-        `✅ Saqlandi: ${formatMoney(savedExpense.amount)}`,
-        `Kategoriya: ${savedExpense.category}`,
-        `Qolgan balans: ${formatMoney(balance)}`
-      ].join('\n'),
+      buildSavedExpensesText(savedExpenses, balance, skippedCount),
       MAIN_KEYBOARD
     );
   } catch (error) {

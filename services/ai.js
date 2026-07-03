@@ -195,11 +195,20 @@ function extractJson(rawText) {
     .replace(/```$/i, '')
     .trim();
 
+  const firstBracket = withoutFence.indexOf('[');
+  const lastBracket = withoutFence.lastIndexOf(']');
   const firstBrace = withoutFence.indexOf('{');
   const lastBrace = withoutFence.lastIndexOf('}');
 
+  if (firstBracket !== -1
+    && lastBracket !== -1
+    && lastBracket > firstBracket
+    && (firstBrace === -1 || firstBracket < firstBrace)) {
+    return withoutFence.slice(firstBracket, lastBracket + 1);
+  }
+
   if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
-    throw new Error('Gemini JSON obyekt qaytarmadi.');
+    throw new Error('Gemini JSON qiymat qaytarmadi.');
   }
 
   return withoutFence.slice(firstBrace, lastBrace + 1);
@@ -248,8 +257,29 @@ function normalizeExpensePayload(payload, fallbackNote) {
   };
 }
 
+function normalizeExpenseListPayload(payload, fallbackNote) {
+  const expenses = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.expenses)
+      ? payload.expenses
+      : payload?.amount
+        ? [payload]
+        : [];
+
+  if (!expenses.length) {
+    throw new Error("Gemini xarajatlar ro'yxatini qaytarmadi.");
+  }
+
+  return expenses.map((expense) => normalizeExpensePayload(expense, fallbackNote));
+}
+
 function inferCategory(text) {
   const lowerText = String(text || '').toLowerCase();
+
+  if (/(^|\s)(o'qish|oqish|kontrakt|universitet|maktab|kurs)(\s|$)/i.test(lowerText)) {
+    return 'Boshqa';
+  }
+
   const matched = CATEGORY_KEYWORDS.find(({ keywords }) => (
     keywords.some((keyword) => lowerText.includes(keyword))
   ));
@@ -278,6 +308,66 @@ function parseExpenseLocally(text) {
     category: inferCategory(cleanText),
     note
   };
+}
+
+function parseExpensesLocally(text) {
+  const cleanText = compactInput(text, 200);
+  const amountMatches = [...cleanText.matchAll(new RegExp(AMOUNT_PATTERN.source, 'g'))];
+
+  if (!amountMatches.length) {
+    return null;
+  }
+
+  const amounts = amountMatches
+    .map((match) => ({
+      raw: match[0],
+      index: match.index,
+      amount: toPositiveNumber(match[0])
+    }))
+    .filter((match) => match.amount);
+
+  if (!amounts.length) {
+    return null;
+  }
+
+  const lastAmount = amounts[amounts.length - 1];
+  const tailAfterLastAmount = compactInput(
+    cleanText
+      .slice(lastAmount.index + lastAmount.raw.length)
+      .replace(/^[\s+;,.-]+/, ''),
+    200
+  );
+  const tailParts = tailAfterLastAmount
+    .split(/\s+(?:va|hamda)\s+|[;,]/i)
+    .map((part) => compactInput(part.replace(/^[\s+;,.-]+|[\s+;,.-]+$/g, ''), 80))
+    .filter(Boolean)
+    .map((part) => (
+      /to'?lovi|tolovi/i.test(tailAfterLastAmount) && !/to'?lov|tolov/i.test(part)
+        ? `${part} to'lovi`
+        : part
+    ));
+  const canUseTailPartsForNotes = amounts.length > 1 && tailParts.length === amounts.length;
+
+  return amounts.map((match, index) => {
+    const nextMatch = amounts[index + 1];
+    const segmentEnd = nextMatch ? nextMatch.index : cleanText.length;
+    const noteFromSegment = compactInput(
+      cleanText
+        .slice(match.index + match.raw.length, segmentEnd)
+        .replace(/^[\s+;,.-]*(?:va\s+)?/i, '')
+        .replace(/[\s+;,.-]+$/g, ''),
+      80
+    );
+    const note = canUseTailPartsForNotes
+      ? tailParts[index]
+      : noteFromSegment || tailAfterLastAmount || cleanText;
+
+    return {
+      amount: match.amount,
+      category: inferCategory(note),
+      note
+    };
+  });
 }
 
 function formatMoney(value) {
@@ -391,11 +481,15 @@ async function categorizeExpense(text) {
     throw new Error("Xarajat matni bo'sh bo'lmasligi kerak.");
   }
 
-  const localFallback = parseExpenseLocally(cleanText);
+  const localFallback = parseExpensesLocally(cleanText);
   const prompt = [
-    "Quyidagi xarajat matnidan summa va kategoriyani JSON formatida ajrat: [Oziq-ovqat, Transport, Kommunal, Ko'ngilochar, Kiyim-kechak, Sog'liq, Boshqa].",
-    "Faqat JSON qaytar, boshqa hech narsa yozma.",
-    'JSON formati aniq shunday bolsin: {"amount":25000,"category":"Oziq-ovqat","note":"nonga"}.',
+    "Quyidagi matnda bitta yoki bir nechta xarajat bo'lishi mumkin.",
+    "Har bir xarajatni alohida summa, kategoriya va izoh sifatida JSON massiv qilib qaytar.",
+    "Ajratuvchilar '+', ',', ';', 'va', yangi qator yoki oddiy bo'shliq bo'lishi mumkin.",
+    "Kategoriyalar faqat shu ro'yxatdan bo'lsin: Oziq-ovqat, Transport, Kommunal, Ko'ngilochar, Kiyim-kechak, Sog'liq, Boshqa.",
+    "Faqat JSON massiv qaytar, boshqa hech narsa yozma.",
+    'JSON formati aniq shunday bolsin: [{"amount":25000,"category":"Oziq-ovqat","note":"nonga"},{"amount":15000,"category":"Transport","note":"taxi"}].',
+    'Masalan, "532000+586000 o\'qish va telefon to\'lovi" uchun taxminan [{"amount":532000,"category":"Boshqa","note":"o\'qish to\'lovi"},{"amount":586000,"category":"Kommunal","note":"telefon to\'lovi"}] qaytar.',
     `Matn: "${cleanText.replace(/"/g, '\\"')}"`
   ].join('\n');
 
@@ -434,7 +528,7 @@ async function categorizeExpense(text) {
 
   try {
     const parsed = JSON.parse(extractJson(rawText));
-    return normalizeExpensePayload(parsed, cleanText);
+    return normalizeExpenseListPayload(parsed, cleanText);
   } catch (error) {
     if (localFallback) {
       debugAi('categorizeExpense.localFallback', localFallback);
@@ -521,5 +615,6 @@ module.exports = {
   categorizeVoiceExpense,
   generateLocalAdvice,
   parseExpenseLocally,
+  parseExpensesLocally,
   generateAdvice
 };
