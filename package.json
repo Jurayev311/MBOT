@@ -9,7 +9,7 @@
     "check": "node --check index.js && node --check config/db.js && node --check services/ai.js && node --check services/apiUsageService.js && node --check services/userService.js && node --check services/expenseService.js && node --check bot/bot.js && node --check bot/handlers.js && node --check jobs/monthCheck.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -17,6 +17,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "node-cron": "^4.5.0",
-    "node-telegram-bot-api": "^1.1.2"
+    "node-telegram-bot-api": "^1.1.2",
+    "ws": "^8.21.0"
   }
 }
