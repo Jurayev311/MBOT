@@ -50,6 +50,10 @@ const ADMIN_VIEW_PREFIX = 'adm_v_';
 const ADMIN_DELETE_ASK_PREFIX = 'adm_da_';
 const ADMIN_DELETE_DO_PREFIX = 'adm_dd_';
 const ADMIN_DELETE_CANCEL_PREFIX = 'adm_dc_';
+const EXPENSE_EDIT_PREFIX = 'exed_';
+const EXPENSE_DELETE_PREFIX = 'exdel_';
+const EXPENSE_DELETE_CONFIRM_PREFIX = 'exok_';
+const EXPENSE_DELETE_CANCEL_PREFIX = 'excn_';
 const rateBuckets = new Map();
 const userStates = new Map();
 const consumedCallbackMessages = new Map();
@@ -237,6 +241,77 @@ function parseAdminStatsCallback(data) {
   }
 
   return null;
+}
+
+function buildExpenseActionCallback(prefix, expenseId, telegramId) {
+  return `${prefix}${expenseId}_${telegramId}`;
+}
+
+function parseExpenseActionCallback(data) {
+  const value = String(data || '');
+  const actionMap = [
+    [EXPENSE_DELETE_CONFIRM_PREFIX, 'deleteConfirm'],
+    [EXPENSE_DELETE_CANCEL_PREFIX, 'deleteCancel'],
+    [EXPENSE_DELETE_PREFIX, 'deleteAsk'],
+    [EXPENSE_EDIT_PREFIX, 'edit']
+  ];
+
+  for (const [prefix, action] of actionMap) {
+    if (!value.startsWith(prefix)) {
+      continue;
+    }
+
+    const payload = value.slice(prefix.length);
+    const match = payload.match(/^([0-9a-fA-F-]{36})_(\d+)$/);
+
+    if (match) {
+      return {
+        action,
+        expenseId: match[1],
+        telegramId: match[2]
+      };
+    }
+  }
+
+  return null;
+}
+
+function getExpenseActionMarkup(expense, telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: '✏️ Tahrirlash',
+            callback_data: buildExpenseActionCallback(EXPENSE_EDIT_PREFIX, expense.id, telegramId)
+          },
+          {
+            text: "🗑️ O'chirish",
+            callback_data: buildExpenseActionCallback(EXPENSE_DELETE_PREFIX, expense.id, telegramId)
+          }
+        ]
+      ]
+    }
+  };
+}
+
+function getExpenseDeleteConfirmMarkup(expenseId, telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "Ha, o'chirish",
+            callback_data: buildExpenseActionCallback(EXPENSE_DELETE_CONFIRM_PREFIX, expenseId, telegramId)
+          },
+          {
+            text: 'Bekor qilish',
+            callback_data: buildExpenseActionCallback(EXPENSE_DELETE_CANCEL_PREFIX, expenseId, telegramId)
+          }
+        ]
+      ]
+    }
+  };
 }
 
 function formatUserName(user, from = {}) {
@@ -717,6 +792,11 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
   ].filter((line) => line !== null).join('\n');
 }
 
+async function getCurrentBalance(user, month = user?.current_month || userService.getMonthKey()) {
+  const summary = await expenseService.getMonthlySummary(user.id, month);
+  return Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
+}
+
 async function sendLongMessage(bot, chatId, text) {
   const chunks = [];
   const maxLength = 3800;
@@ -943,10 +1023,14 @@ async function handleExpenseText(bot, chatId, user, text) {
     const summary = await expenseService.getMonthlySummary(user.id, month);
     const balance = Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
 
+    const messageOptions = expenses.length === 1 && savedExpenses.length === 1 && skippedCount === 0
+      ? getExpenseActionMarkup(savedExpenses[0], user.telegram_id)
+      : MAIN_KEYBOARD;
+
     await bot.sendMessage(
       chatId,
       buildSavedExpensesText(savedExpenses, balance, skippedCount),
-      MAIN_KEYBOARD
+      messageOptions
     );
   } catch (error) {
     console.error('Xarajatni qayta ishlashda xato:', error);
@@ -1033,7 +1117,7 @@ async function handleVoice(bot, msg) {
         `Kategoriya: ${savedExpense.category}`,
         `Qolgan balans: ${formatMoney(balance)}`
       ].join('\n'),
-      MAIN_KEYBOARD
+      getExpenseActionMarkup(savedExpense, user.telegram_id)
     );
   } catch (error) {
     console.error('Ovozli xarajatni qayta ishlashda xato:', error);
@@ -1207,6 +1291,104 @@ async function handleAdminStatsCallback(bot, query, adminCallback) {
   }
 }
 
+async function handleExpenseActionCallback(bot, query, user, expenseAction) {
+  const telegramId = getTelegramId(query.from);
+
+  if (String(expenseAction.telegramId) !== telegramId) {
+    await answerCallback(bot, query, 'Bu xarajat sizga tegishli emas.');
+    return;
+  }
+
+  await answerCallback(bot, query);
+
+  if (expenseAction.action === 'deleteAsk') {
+    const expense = await expenseService.getExpenseByIdForUser(user.id, expenseAction.expenseId);
+
+    if (!expense) {
+      await editCallbackMessageText(
+        bot,
+        query,
+        "Xarajat topilmadi yoki allaqachon o'chirilgan.",
+        { reply_markup: { inline_keyboard: [] } }
+      );
+      return;
+    }
+
+    await editCallbackMessageText(
+      bot,
+      query,
+      [
+        "Bu xarajatni o'chirmoqchimisiz?",
+        '',
+        `${formatMoney(expense.amount)} (${expense.category})`
+      ].join('\n'),
+      getExpenseDeleteConfirmMarkup(expense.id, telegramId)
+    );
+    return;
+  }
+
+  if (expenseAction.action === 'deleteCancel') {
+    await editCallbackMessageText(
+      bot,
+      query,
+      "O'chirish bekor qilindi.",
+      { reply_markup: { inline_keyboard: [] } }
+    );
+    return;
+  }
+
+  if (expenseAction.action === 'deleteConfirm') {
+    try {
+      const deletedExpense = await expenseService.deleteExpenseByIdForUser(user.id, expenseAction.expenseId);
+      const balance = await getCurrentBalance(user, deletedExpense.month || user.current_month || userService.getMonthKey());
+
+      await editCallbackMessageText(
+        bot,
+        query,
+        `✅ Xarajat o'chirildi. Yangi balans: ${formatMoney(balance)}`,
+        { reply_markup: { inline_keyboard: [] } }
+      );
+    } catch (error) {
+      if (error.code === 'EXPENSE_NOT_FOUND') {
+        await editCallbackMessageText(
+          bot,
+          query,
+          "Xarajat allaqachon o'chirilgan yoki topilmadi.",
+          { reply_markup: { inline_keyboard: [] } }
+        );
+        return;
+      }
+
+      throw error;
+    }
+
+    return;
+  }
+
+  if (expenseAction.action === 'edit') {
+    const expense = await expenseService.getExpenseByIdForUser(user.id, expenseAction.expenseId);
+
+    if (!expense) {
+      await editCallbackMessageText(
+        bot,
+        query,
+        "Xarajat topilmadi yoki allaqachon o'chirilgan.",
+        { reply_markup: { inline_keyboard: [] } }
+      );
+      return;
+    }
+
+    await removeInlineKeyboard(bot, query);
+    setUserState(telegramId, 'awaiting_expense_edit_amount', {
+      expenseId: expense.id,
+      oldAmount: Number(expense.amount || 0),
+      category: expense.category,
+      month: expense.month || user.current_month || userService.getMonthKey()
+    });
+    await bot.sendMessage(query.message.chat.id, "Yangi summani kiriting (so'mda):", MAIN_KEYBOARD);
+  }
+}
+
 async function handleCallback(bot, query) {
   const chatId = query.message?.chat?.id;
   const telegramId = getTelegramId(query.from);
@@ -1241,6 +1423,14 @@ async function handleCallback(bot, query) {
       await answerCallback(bot, query);
       await consumeCallbackMessage(bot, query, callbackKey);
       await handlePaymentReviewCallback(bot, query, paymentReview);
+      return;
+    }
+
+    const expenseAction = parseExpenseActionCallback(query.data);
+
+    if (expenseAction) {
+      const user = await userService.ensureUser(query.from);
+      await handleExpenseActionCallback(bot, query, user, expenseAction);
       return;
     }
 
@@ -1363,6 +1553,46 @@ async function handlePhoto(bot, msg) {
   }
 }
 
+async function handleExpenseEditAmountInput(bot, chatId, telegramId, user, stateData, text) {
+  const newAmount = parsePositiveAmount(text);
+
+  if (!newAmount) {
+    await bot.sendMessage(chatId, "Yangi summani musbat raqam shaklida yozing. Masalan: 53200", MAIN_KEYBOARD);
+    return;
+  }
+
+  try {
+    const existingExpense = await expenseService.getExpenseByIdForUser(user.id, stateData.expenseId);
+
+    if (!existingExpense) {
+      clearUserState(telegramId);
+      await bot.sendMessage(chatId, "Tahrirlanadigan xarajat topilmadi yoki allaqachon o'chirilgan.", MAIN_KEYBOARD);
+      return;
+    }
+
+    const oldAmount = Number(existingExpense.amount || stateData.oldAmount || 0);
+    const updatedExpense = await expenseService.updateExpenseAmount(user.id, stateData.expenseId, newAmount);
+    clearUserState(telegramId);
+
+    const month = updatedExpense.month || stateData.month || user.current_month || userService.getMonthKey();
+    const balance = await getCurrentBalance(user, month);
+
+    await bot.sendMessage(
+      chatId,
+      [
+        `✅ Yangilandi: ${formatMoney(oldAmount)} -> ${formatMoney(updatedExpense.amount)}`,
+        `Kategoriya: ${updatedExpense.category}`,
+        `Yangi balans: ${formatMoney(balance)}`
+      ].join('\n'),
+      MAIN_KEYBOARD
+    );
+  } catch (error) {
+    console.error('Xarajatni tahrirlashda xato:', error);
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, "Xarajatni tahrirlashda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
+  }
+}
+
 async function handleMessage(bot, msg) {
   const text = msg.text;
 
@@ -1405,6 +1635,11 @@ async function handleMessage(bot, msg) {
       const updatedUser = await userService.updateFullName(user.id, normalizedText);
       clearUserState(telegramId);
       await bot.sendMessage(chatId, `Ism yangilandi: ${updatedUser.full_name}`, MAIN_KEYBOARD);
+      return;
+    }
+
+    if (state?.type === 'awaiting_expense_edit_amount') {
+      await handleExpenseEditAmountInput(bot, chatId, telegramId, user, state.data, normalizedText);
       return;
     }
 

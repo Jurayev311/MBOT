@@ -2,6 +2,8 @@ const { supabase } = require('../config/db');
 const { CATEGORIES } = require('./ai');
 const { getMonthKey } = require('./userService');
 
+const EXPENSE_SELECT_COLUMNS = 'id, user_id, amount, category, note, month, input_type, created_at';
+
 function sanitizeNote(note) {
   // Bazaga yoziladigan izohlar qisqa va bir qatorli saqlanadi.
   return String(note || '')
@@ -29,6 +31,16 @@ function validateExpense({ amount, category, note }) {
     category: normalizedCategory,
     note: normalizedNote
   };
+}
+
+function assertPositiveAmount(amount) {
+  const normalizedAmount = Number(amount);
+
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    throw new Error("Xarajat summasi musbat raqam bo'lishi kerak.");
+  }
+
+  return normalizedAmount;
 }
 
 function normalizeInputType(inputType) {
@@ -60,7 +72,7 @@ async function createExpense(userId, expense, month = getMonthKey(), inputType =
 async function getMonthlyExpenses(userId, month = getMonthKey()) {
   const { data, error } = await supabase
     .from('expenses')
-    .select('id, amount, category, note, month, input_type, created_at')
+    .select(EXPENSE_SELECT_COLUMNS)
     .eq('user_id', userId)
     .eq('month', month)
     .order('created_at', { ascending: false });
@@ -70,6 +82,65 @@ async function getMonthlyExpenses(userId, month = getMonthKey()) {
   }
 
   return data || [];
+}
+
+async function getExpenseByIdForUser(userId, expenseId) {
+  const { data, error } = await supabase
+    .from('expenses')
+    .select(EXPENSE_SELECT_COLUMNS)
+    .eq('id', expenseId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+async function updateExpenseAmount(userId, expenseId, amount) {
+  const { data, error } = await supabase
+    .from('expenses')
+    .update({ amount: assertPositiveAmount(amount) })
+    .eq('id', expenseId)
+    .eq('user_id', userId)
+    .select(EXPENSE_SELECT_COLUMNS)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    const notFoundError = new Error('EXPENSE_NOT_FOUND');
+    notFoundError.code = 'EXPENSE_NOT_FOUND';
+    throw notFoundError;
+  }
+
+  return data;
+}
+
+async function deleteExpenseByIdForUser(userId, expenseId) {
+  const expense = await getExpenseByIdForUser(userId, expenseId);
+
+  if (!expense) {
+    const notFoundError = new Error('EXPENSE_NOT_FOUND');
+    notFoundError.code = 'EXPENSE_NOT_FOUND';
+    throw notFoundError;
+  }
+
+  const { error } = await supabase
+    .from('expenses')
+    .delete()
+    .eq('id', expenseId)
+    .eq('user_id', userId);
+
+  if (error) {
+    throw error;
+  }
+
+  return expense;
 }
 
 async function getMonthlySummary(userId, month = getMonthKey()) {
@@ -136,10 +207,13 @@ async function getAdviceData(user) {
 
 module.exports = {
   createExpense,
+  deleteExpenseByIdForUser,
   getAdviceData,
+  getExpenseByIdForUser,
   getMonthlyExpenses,
   getMonthlyHistory,
   getMonthlySummary,
   sanitizeNote,
+  updateExpenseAmount,
   validateExpense
 };
