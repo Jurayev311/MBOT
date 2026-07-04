@@ -820,10 +820,19 @@ async function handleReport(bot, chatId, user) {
 }
 
 async function handleAnalysis(bot, chatId, user) {
-  await bot.sendMessage(chatId, "Tahlil tayyorlanmoqda, bir necha soniya kuting...", MAIN_KEYBOARD);
-  const adviceData = await expenseService.getAdviceData(user);
-  const advice = await generateAdvice(adviceData);
-  await sendLongMessage(bot, chatId, advice || "Hozircha tahlil tayyorlab bo'lmadi.");
+  try {
+    await bot.sendMessage(chatId, "Tahlil tayyorlanmoqda, bir necha soniya kuting...", MAIN_KEYBOARD);
+    const adviceData = await expenseService.getAdviceData(user);
+    const advice = await generateAdvice(adviceData);
+    await sendLongMessage(bot, chatId, advice || "Hozir tahlil qila olmadim, birozdan keyin qayta urinib ko'ring");
+  } catch (error) {
+    console.error('Tahlil tayyorlashda xato:', error);
+    await bot.sendMessage(
+      chatId,
+      error.userMessage || "Hozir tahlil qila olmadim, birozdan keyin qayta urinib ko'ring",
+      MAIN_KEYBOARD
+    );
+  }
 }
 
 async function handleSalaryInput(bot, chatId, telegramId, user, text, nextState = null) {

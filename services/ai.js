@@ -19,6 +19,7 @@ const EASY_FLEXIBLE_CATEGORIES = ['Transport', "Ko'ngilochar"];
 const FLEXIBLE_CATEGORIES = [...SIMPLE_FLEXIBLE_CATEGORIES, ...EASY_FLEXIBLE_CATEGORIES];
 const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
 const AI_BUSY_MESSAGE = "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.";
+const AI_ANALYSIS_UNAVAILABLE_MESSAGE = "Hozir tahlil qila olmadim, birozdan keyin qayta urinib ko'ring";
 const GEMINI_MIN_INTERVAL_MS = 300;
 const GEMINI_RETRY_DELAY_MS = 2000;
 const AMOUNT_PATTERN = /\b\d{1,3}(?:[ .]\d{3})+(?:[,.]\d+)?\b|\b\d+(?:[,.]\d+)?\b/;
@@ -95,6 +96,14 @@ function createAiBusyError(cause) {
   const error = new Error('AI_TEMPORARILY_UNAVAILABLE');
   error.code = 'AI_TEMPORARILY_UNAVAILABLE';
   error.userMessage = AI_BUSY_MESSAGE;
+  error.cause = cause;
+  return error;
+}
+
+function createAnalysisUnavailableError(cause) {
+  const error = new Error('AI_ANALYSIS_UNAVAILABLE');
+  error.code = 'AI_ANALYSIS_UNAVAILABLE';
+  error.userMessage = AI_ANALYSIS_UNAVAILABLE_MESSAGE;
   error.cause = cause;
   return error;
 }
@@ -378,6 +387,81 @@ function formatPercent(value) {
   return String(Math.round(Number(value || 0)));
 }
 
+function getDateParts(date = new Date()) {
+  const timeZone = process.env.BOT_TIMEZONE || 'Asia/Tashkent';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day)
+  };
+}
+
+function getMonthTiming(date = new Date()) {
+  const parts = getDateParts(date);
+  const daysInMonth = new Date(Date.UTC(parts.year, parts.month, 0)).getUTCDate();
+  const dayOfMonth = Math.max(1, parts.day || 1);
+
+  return {
+    dayOfMonth,
+    daysInMonth,
+    daysRemaining: Math.max(0, daysInMonth - dayOfMonth)
+  };
+}
+
+function getCategoryPercent(amount, totalSpent) {
+  const total = Number(totalSpent || 0);
+
+  if (total <= 0) {
+    return 0;
+  }
+
+  return Math.round((Number(amount || 0) / total) * 100);
+}
+
+function buildCategoryBreakdown(byCategory = {}, totalSpent = 0) {
+  return CATEGORIES.map((category) => {
+    const amount = Math.round(Number(byCategory[category] || 0));
+
+    return {
+      category,
+      amount,
+      percent: getCategoryPercent(amount, totalSpent),
+      type: FIXED_CATEGORIES.includes(category) ? 'fixed' : 'flexible'
+    };
+  });
+}
+
+function formatCategoryBreakdownList(items) {
+  const positiveItems = items.filter((item) => item.amount > 0);
+
+  if (!positiveItems.length) {
+    return "xarajat yo'q";
+  }
+
+  return positiveItems
+    .map((item) => `${item.category}: ${formatMoney(item.amount)} (${item.percent}%)`)
+    .join('; ');
+}
+
+function truncateAdviceText(text, maxLength = 500) {
+  const cleanText = String(text || '').replace(/\s+\n/g, '\n').trim();
+
+  if (cleanText.length <= maxLength) {
+    return cleanText;
+  }
+
+  return `${cleanText.slice(0, maxLength - 3).trim()}...`;
+}
+
 function getTopCategory(byCategory = {}) {
   const [name, amount] = Object.entries(byCategory)
     .filter(([, value]) => Number(value) > 0)
@@ -402,10 +486,26 @@ function buildAdviceMetrics(userData) {
   const salary = Number(current.salary || 0);
   const totalSpent = Number(current.totalSpent || 0);
   const byCategory = current.byCategory || {};
+  const categoryBreakdown = buildCategoryBreakdown(byCategory, totalSpent);
+  const fixedBreakdown = categoryBreakdown.filter((item) => item.type === 'fixed');
+  const flexibleBreakdown = categoryBreakdown.filter((item) => item.type === 'flexible');
   const topCategory = getTopCategory(byCategory);
   const adviceCategory = getTopFlexibleCategory(byCategory);
+  const adviceReductionPercent = adviceCategory.amount > 0
+    ? EASY_FLEXIBLE_CATEGORIES.includes(adviceCategory.name) ? 20 : 10
+    : 0;
+  const adviceSavings = adviceCategory.amount > 0
+    ? Math.round(adviceCategory.amount * (adviceReductionPercent / 100))
+    : 0;
   const spentPercent = salary > 0 ? (totalSpent / salary) * 100 : 0;
   const remainingBalance = salary - totalSpent;
+  const monthTiming = getMonthTiming();
+  const dailyAverage = totalSpent / Math.max(1, monthTiming.dayOfMonth);
+  const projectedMonthlySpent = Math.round(dailyAverage * monthTiming.daysInMonth);
+  const projectedMonthEndBalance = Math.round(salary - projectedMonthlySpent);
+  const projectionLimit = salary > 0 ? salary * 2 : 0;
+  const canShowProjectedBalance = salary > 0
+    && Math.abs(projectedMonthEndBalance) <= projectionLimit;
 
   return {
     month: current.month,
@@ -413,6 +513,20 @@ function buildAdviceMetrics(userData) {
     totalSpent,
     spentPercent: Math.round(spentPercent),
     remainingBalance: Math.round(remainingBalance),
+    dayOfMonth: monthTiming.dayOfMonth,
+    daysInMonth: monthTiming.daysInMonth,
+    daysRemaining: monthTiming.daysRemaining,
+    categoryBreakdown,
+    fixedBreakdown,
+    flexibleBreakdown,
+    projectedMonthlySpent,
+    projectedMonthEndBalance,
+    canShowProjectedBalance,
+    projectionHint: canShowProjectedBalance
+      ? `oy oxirida taxminiy balans ${formatMoney(projectedMonthEndBalance)}`
+      : projectedMonthEndBalance >= 0
+        ? "aniq prognoz sonini yozma; hozirgi sur'atda oy oxirigacha yetarli yoki ehtiyotkorlik kerak deb sifat jihatidan ayt"
+        : "aniq prognoz sonini yozma; tejash kerak deb sifat jihatidan ayt",
     topCategory: {
       name: topCategory.name,
       amount: Math.round(topCategory.amount)
@@ -420,7 +534,9 @@ function buildAdviceMetrics(userData) {
     adviceCategory: adviceCategory.amount > 0
       ? {
         name: adviceCategory.name,
-        amount: Math.round(adviceCategory.amount)
+        amount: Math.round(adviceCategory.amount),
+        reductionPercent: adviceReductionPercent,
+        savings: adviceSavings
       }
       : null,
     byCategory
@@ -466,6 +582,50 @@ function buildAdviceText(metrics, adviceSentence) {
     `Eng ko'p xarajat: ${metrics.topCategory.name} (${formatMoney(metrics.topCategory.amount)}).`,
     '',
     `💡 ${adviceSentence}`
+  ].join('\n');
+}
+
+function buildAnalysisPrompt(metrics) {
+  const categoryList = formatCategoryBreakdownList(metrics.categoryBreakdown);
+  const fixedList = formatCategoryBreakdownList(metrics.fixedBreakdown);
+  const flexibleList = formatCategoryBreakdownList(metrics.flexibleBreakdown);
+  const adviceTarget = metrics.adviceCategory
+    ? `${metrics.adviceCategory.name}: ${metrics.adviceCategory.reductionPercent}% kamaytirsa ~${formatMoney(metrics.adviceCategory.savings)} qoladi`
+    : "moslashuvchan xarajat yo'q; aynan shu mazmunda yoz: Moslashuvchan xarajat yo'q, kamaytiradigan alohida joy ko'rinmayapti.";
+
+  return [
+    "Sen moliyaviy yordamchisan. Quyidagi ma'lumotlar asosida foydalanuvchiga QISQA va ANIQ tahlil yoz.",
+    '',
+    "Ma'lumotlar:",
+    `- Oylik maosh: ${formatMoney(metrics.salary)}`,
+    `- Bugungi kun: oyning ${metrics.dayOfMonth}-kuni, ${metrics.daysRemaining} kun qolgan`,
+    `- Jami sarflangan: ${formatMoney(metrics.totalSpent)} (${formatPercent(metrics.spentPercent)}%)`,
+    `- Qolgan balans: ${formatMoney(metrics.remainingBalance)}`,
+    `- Kategoriyalar: ${categoryList}`,
+    `- Majburiy xarajatlar (kamaytirib bo'lmaydi): ${fixedList}`,
+    `- Moslashuvchan xarajatlar (kamaytirish mumkin): ${flexibleList}`,
+    `- Tavsiya uchun yagona moslashuvchan asos: ${adviceTarget}`,
+    `- Joriy sarflash sur'ati bo'yicha backend hisob-kitobi: ${metrics.projectionHint}`,
+    '',
+    'QATTIQ QOIDALAR:',
+    '1. Javob MAKSIMAL 4 ta qisqa jumla bo\'lsin. Uzun tushuntirish, umumiy gaplar ("moliyaviy barqarorlik", "moliyaviy intizom" kabi), salomlashish, xayrlashish YOZMA.',
+    '2. Faqat MOSLASHUVCHAN xarajatlar orasidan maslahat ber. Majburiy xarajatlarni (Kommunal, Sog\'liq) hech qachon "kamaytiring" deb aytma - agar shular eng katta bo\'lsa, buni aytib, moslashuvchan qismdan boshqa maslahat top. Agar moslashuvchan xarajat umuman yo\'q bo\'lsa, faqat "Moslashuvchan xarajat yo\'q, kamaytiradigan alohida joy ko\'rinmayapti" mazmunida yoz.',
+    '3. Agar "Tavsiya uchun yagona moslashuvchan asos" berilgan bo\'lsa, faqat o\'sha kategoriya, foiz va tejash summasidan foydalan; boshqa foiz, kunlik limit, kunlik budjet yoki yangi raqam o\'ylab topma.',
+    '4. Real vaziyatni baholab, joriy sarflash sur\'ati asosida oy oxirida taxminan qancha balans (musbat yoki manfiy) qolishini hisoblab ayt - lekin bu son maoshning 2 barobaridan oshib ketmasin (agar formula noto\'g\'ri katta son chiqarsa, buning o\'rniga shunchaki "hozirgi sur\'atda oy oxirigacha yetarli" yoki "tejash kerak" deb sifat jihatidan ayt, aniq son bermang).',
+    '5. Agar kamaytirish tavsiya qilsang, 1 qisqa jumlada nima uchun buni ehtiyot bilan qilish kerakligini ayt (masalan sifat yoki qulaylikka ta\'siri).',
+    '6. "Kunlik limit", "kunlik budjet", "barobar oshdi" kabi iboralarni yozma. Ohang - do\'stona, lekin professional va to\'g\'ridan-to\'g\'ri. Ortiqcha emoji ishlatma (maksimal 2-3 ta).',
+    '',
+    "Faqat tahlil matnini yoz, boshqa hech narsa qo'shma."
+  ].join('\n');
+}
+
+function buildGeminiAdviceResponse(metrics, rawAdviceText) {
+  const adviceText = truncateAdviceText(rawAdviceText);
+
+  return [
+    `📊 Bu oy ${formatPercent(metrics.spentPercent)}% sarflandi. Qolgan balans: ${formatMoney(metrics.remainingBalance)}.`,
+    '',
+    adviceText || AI_ANALYSIS_UNAVAILABLE_MESSAGE
   ].join('\n');
 }
 
@@ -599,7 +759,44 @@ async function categorizeVoiceExpense(fileUrl, mimeType = 'audio/ogg') {
 
 async function generateAdvice(userData) {
   const metrics = buildAdviceMetrics(userData);
-  return buildAdviceText(metrics, buildAdviceSentence(metrics));
+  const prompt = buildAnalysisPrompt(metrics);
+
+  debugAi('generateAdvice.model', getConfiguredModelName());
+  debugAi('generateAdvice.metrics', {
+    salary: metrics.salary,
+    totalSpent: metrics.totalSpent,
+    spentPercent: metrics.spentPercent,
+    remainingBalance: metrics.remainingBalance,
+    dayOfMonth: metrics.dayOfMonth,
+    daysRemaining: metrics.daysRemaining,
+    projectedMonthEndBalance: metrics.projectedMonthEndBalance,
+    canShowProjectedBalance: metrics.canShowProjectedBalance
+  });
+
+  try {
+    const result = await callGeminiWithRetry('generateAdvice', () => getGeminiModel().generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 220
+      }
+    }));
+
+    await logApiUsageSafely();
+    const rawText = result.response.text();
+    debugAi('generateAdvice.rawResponse', rawText);
+    debugAi('generateAdvice.finishReason', result.response.candidates?.[0]?.finishReason);
+
+    return buildGeminiAdviceResponse(metrics, rawText);
+  } catch (error) {
+    debugAi('generateAdvice.requestError', {
+      model: geminiModelName || getConfiguredModelName(),
+      message: error.message,
+      status: error.status || error.code
+    });
+
+    throw createAnalysisUnavailableError(error);
+  }
 }
 
 module.exports = {
@@ -609,8 +806,11 @@ module.exports = {
   EASY_FLEXIBLE_CATEGORIES,
   FLEXIBLE_CATEGORIES,
   AI_BUSY_MESSAGE,
+  AI_ANALYSIS_UNAVAILABLE_MESSAGE,
   DEFAULT_GEMINI_MODEL,
+  buildAnalysisPrompt,
   buildAdviceMetrics,
+  buildGeminiAdviceResponse,
   categorizeExpense,
   categorizeVoiceExpense,
   generateLocalAdvice,
