@@ -7,14 +7,26 @@ const CATEGORIES = [
   'Oziq-ovqat',
   'Transport',
   'Kommunal',
-  "Ko'ngilochar",
-  'Kiyim-kechak',
+  'Uy-joy',
   "Sog'liq",
+  "Ta'lim",
+  'Texnika',
+  'Kiyim-kechak',
+  "Bo'lib to'lash",
+  'Oilaviy yordam',
+  "Ko'ngilochar",
   'Boshqa'
 ];
 
-const FIXED_CATEGORIES = ['Kommunal', "Sog'liq"];
-const SIMPLE_FLEXIBLE_CATEGORIES = ['Oziq-ovqat', 'Kiyim-kechak', 'Boshqa'];
+const FIXED_CATEGORIES = ['Kommunal', "Sog'liq", 'Uy-joy', "Bo'lib to'lash"];
+const SIMPLE_FLEXIBLE_CATEGORIES = [
+  'Oziq-ovqat',
+  "Ta'lim",
+  'Texnika',
+  'Kiyim-kechak',
+  'Oilaviy yordam',
+  'Boshqa'
+];
 const EASY_FLEXIBLE_CATEGORIES = ['Transport', "Ko'ngilochar"];
 const FLEXIBLE_CATEGORIES = [...SIMPLE_FLEXIBLE_CATEGORIES, ...EASY_FLEXIBLE_CATEGORIES];
 const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
@@ -25,20 +37,40 @@ const GEMINI_RETRY_DELAY_MS = 2000;
 const AMOUNT_PATTERN = /\b\d{1,3}(?:[ .]\d{3})+(?:[,.]\d+)?\b|\b\d+(?:[,.]\d+)?\b/;
 const CATEGORY_KEYWORDS = [
   {
+    category: 'Uy-joy',
+    keywords: ['kvartira', 'ijara', 'uy-joy', 'uy joy', 'uy uchun', 'kvartira uchun', 'arenda', 'renta']
+  },
+  {
+    category: "Bo'lib to'lash",
+    keywords: ['kredit', "bo'lib", 'bolib', 'rassrochka', 'muddatli', 'oylik tolov', "oylik to'lov", 'muntazam tolov', "muntazam to'lov"]
+  },
+  {
+    category: 'Oilaviy yordam',
+    keywords: ['dadam', 'otam', 'adamga', 'onam', 'oyim', 'akam', 'ukam', 'opam', 'singlim', 'qarindosh', 'ota-onam', 'ota onam', 'oilamga']
+  },
+  {
+    category: "Ta'lim",
+    keywords: ["o'qish", 'oqish', 'kontrakt', 'universitet', 'maktab', 'kurs', 'repetitor', 'kitob', 'daftar', "ta'lim", 'talim']
+  },
+  {
+    category: 'Texnika',
+    keywords: ['telefon', 'smartfon', 'iphone', 'android', 'noutbuk', 'laptop', 'kompyuter', 'planshet', 'televizor', 'muzlatkich', 'konditsioner', 'texnika']
+  },
+  {
     category: 'Transport',
     keywords: ['taxi', 'taksi', 'yandex', 'metro', 'avtobus', 'transport', 'benzin', 'yoqilgi', 'yonilgi', "yo'l", 'yol']
   },
   {
     category: 'Oziq-ovqat',
-    keywords: ['non', 'nonga', 'ovqat', 'osh', 'somsa', 'lavash', 'market', 'supermarket', 'meva', 'sabzavot', 'suv', 'choy', 'qahva']
+    keywords: ['non', 'nonga', 'ovqat', 'osh', 'somsa', 'lavash', 'market', 'supermarket', 'meva', 'sabzavot', 'choy', 'qahva', 'ichimlik']
   },
   {
     category: 'Kommunal',
-    keywords: ['kommunal', 'svet', 'elektr', 'gaz', 'ijara', 'internet', 'telefon', "to'lov", 'tolov']
+    keywords: ['kommunal', 'svet', 'elektr', 'gaz', 'suv', 'internet']
   },
   {
     category: "Ko'ngilochar",
-    keywords: ['kino', 'konsert', "o'yin", 'oyin', 'netflix', 'spotify', 'dam olish', 'kafe']
+    keywords: ['kino', 'konsert', "o'yin", 'oyin', 'netflix', 'spotify', 'dam olish', 'kafe', 'restoran', 'sayohat']
   },
   {
     category: 'Kiyim-kechak',
@@ -49,6 +81,22 @@ const CATEGORY_KEYWORDS = [
     keywords: ['dori', 'dorixona', 'shifokor', 'klinika', 'kasalxona', "sog'liq", 'sogliq', 'tish']
   }
 ];
+
+const CATEGORY_ALIASES = {
+  'uy joy': 'Uy-joy',
+  'uy-joy': 'Uy-joy',
+  uyjoy: 'Uy-joy',
+  talim: "Ta'lim",
+  "ta'lim": "Ta'lim",
+  texnika: 'Texnika',
+  'bolib tolash': "Bo'lib to'lash",
+  "bo'lib to'lash": "Bo'lib to'lash",
+  'bolib tolovi': "Bo'lib to'lash",
+  "bo'lib to'lovi": "Bo'lib to'lash",
+  kredit: "Bo'lib to'lash",
+  'oilaviy yordam': 'Oilaviy yordam',
+  oila: 'Oilaviy yordam'
+};
 
 let geminiModel;
 let geminiModelName;
@@ -247,9 +295,20 @@ function toPositiveNumber(value) {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
+function normalizeCategoryKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[‘’`]/g, "'")
+    .replace(/ʻ/g, "'")
+    .replace(/\s+/g, ' ');
+}
+
 function normalizeCategory(value) {
-  const requested = String(value || '').trim().toLowerCase();
-  return CATEGORIES.find((category) => category.toLowerCase() === requested) || 'Boshqa';
+  const requested = normalizeCategoryKey(value);
+  const exactMatch = CATEGORIES.find((category) => normalizeCategoryKey(category) === requested);
+
+  return exactMatch || CATEGORY_ALIASES[requested] || 'Boshqa';
 }
 
 function normalizeExpensePayload(payload, fallbackNote) {
@@ -284,10 +343,6 @@ function normalizeExpenseListPayload(payload, fallbackNote) {
 
 function inferCategory(text) {
   const lowerText = String(text || '').toLowerCase();
-
-  if (/(^|\s)(o'qish|oqish|kontrakt|universitet|maktab|kurs)(\s|$)/i.test(lowerText)) {
-    return 'Boshqa';
-  }
 
   const matched = CATEGORY_KEYWORDS.find(({ keywords }) => (
     keywords.some((keyword) => lowerText.includes(keyword))
@@ -360,6 +415,12 @@ function parseExpensesLocally(text) {
   return amounts.map((match, index) => {
     const nextMatch = amounts[index + 1];
     const segmentEnd = nextMatch ? nextMatch.index : cleanText.length;
+    const noteBeforeAmount = compactInput(
+      cleanText
+        .slice(0, match.index)
+        .replace(/^[\s+;,.-]+|[\s+;,.-]+$/g, ''),
+      80
+    );
     const noteFromSegment = compactInput(
       cleanText
         .slice(match.index + match.raw.length, segmentEnd)
@@ -369,7 +430,7 @@ function parseExpensesLocally(text) {
     );
     const note = canUseTailPartsForNotes
       ? tailParts[index]
-      : noteFromSegment || tailAfterLastAmount || cleanText;
+      : noteFromSegment || tailAfterLastAmount || noteBeforeAmount || cleanText;
 
     return {
       amount: match.amount,
@@ -646,10 +707,19 @@ async function categorizeExpense(text) {
     "Quyidagi matnda bitta yoki bir nechta xarajat bo'lishi mumkin.",
     "Har bir xarajatni alohida summa, kategoriya va izoh sifatida JSON massiv qilib qaytar.",
     "Ajratuvchilar '+', ',', ';', 'va', yangi qator yoki oddiy bo'shliq bo'lishi mumkin.",
-    "Kategoriyalar faqat shu ro'yxatdan bo'lsin: Oziq-ovqat, Transport, Kommunal, Ko'ngilochar, Kiyim-kechak, Sog'liq, Boshqa.",
+    `Kategoriyalar faqat shu ro'yxatdan bo'lsin: ${CATEGORIES.join(', ')}.`,
+    "Kommunal faqat svet, gaz, suv, internet uchun; kvartira ijarasi yoki uy to'lovi Kommunal emas, Uy-joy.",
+    "Boshqa kategoriyasini faqat aniq hech qaysi toifaga kirmagan holatda ishlat.",
+    "Kategoriyalarni to'g'ri tanlash uchun misollar:",
+    "- 'kvartira uchun', 'ijaraga', 'uy to'lovi' -> Uy-joy",
+    "- 'svet', 'gaz', 'internet', 'suv' -> Kommunal",
+    "- 'telefon sotib oldim', 'noutbuk', 'maishiy texnika' -> Texnika",
+    "- 'dadamga', 'onamga', 'ukamga berdim', 'ota-onamga' -> Oilaviy yordam",
+    "- 'kredit to'lovi', 'bo'lib to'lash', 'oylik to'lov' -> Bo'lib to'lash",
+    "- 'o'qish', 'kurs', 'repetitor', 'kitob' -> Ta'lim",
     "Faqat JSON massiv qaytar, boshqa hech narsa yozma.",
     'JSON formati aniq shunday bolsin: [{"amount":25000,"category":"Oziq-ovqat","note":"nonga"},{"amount":15000,"category":"Transport","note":"taxi"}].',
-    'Masalan, "532000+586000 o\'qish va telefon to\'lovi" uchun taxminan [{"amount":532000,"category":"Boshqa","note":"o\'qish to\'lovi"},{"amount":586000,"category":"Kommunal","note":"telefon to\'lovi"}] qaytar.',
+    'Masalan, "532000+586000 o\'qish va telefon" uchun [{"amount":532000,"category":"Ta\'lim","note":"o\'qish"},{"amount":586000,"category":"Texnika","note":"telefon"}] qaytar.',
     `Matn: "${cleanText.replace(/"/g, '\\"')}"`
   ].join('\n');
 
@@ -705,7 +775,10 @@ async function categorizeVoiceExpense(fileUrl, mimeType = 'audio/ogg') {
   const audioData = await fetchAsBase64(fileUrl);
   const prompt = [
     "Ovozli xabardagi xarajatni tinglab, summa va kategoriyani JSON formatida ajrat.",
-    "Kategoriya faqat shu ro'yxatdan bo'lsin: [Oziq-ovqat, Transport, Kommunal, Ko'ngilochar, Kiyim-kechak, Sog'liq, Boshqa].",
+    `Kategoriya faqat shu ro'yxatdan bo'lsin: [${CATEGORIES.join(', ')}].`,
+    "Kommunal faqat svet, gaz, suv, internet; kvartira ijarasi yoki uy to'lovi -> Uy-joy.",
+    "Telefon/noutbuk/maishiy texnika -> Texnika. O'qish/kurs/kitob -> Ta'lim. Ota-onaga yoki qarindoshga pul -> Oilaviy yordam.",
+    "Kredit, bo'lib to'lash, oylik muntazam to'lov -> Bo'lib to'lash.",
     "Faqat JSON qaytar, boshqa hech narsa yozma.",
     'JSON formati aniq shunday bolsin: {"amount":25000,"category":"Oziq-ovqat","note":"nonga"}.',
     "Agar kategoriya aniq bo'lmasa, Boshqa tanla. Note qismiga qisqa mazmun yoz."

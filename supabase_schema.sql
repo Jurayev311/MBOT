@@ -112,9 +112,14 @@ create table if not exists public.expenses (
       'Oziq-ovqat',
       'Transport',
       'Kommunal',
-      'Ko''ngilochar',
-      'Kiyim-kechak',
+      'Uy-joy',
       'Sog''liq',
+      'Ta''lim',
+      'Texnika',
+      'Kiyim-kechak',
+      'Bo''lib to''lash',
+      'Oilaviy yordam',
+      'Ko''ngilochar',
       'Boshqa'
     )
   ),
@@ -128,6 +133,27 @@ alter table public.expenses add column if not exists input_type text default 'te
 update public.expenses set input_type = 'text' where input_type is null;
 alter table public.expenses alter column input_type set default 'text';
 alter table public.expenses alter column input_type set not null;
+
+alter table public.expenses drop constraint if exists expenses_category_check;
+alter table public.expenses drop constraint if exists expenses_category_valid;
+alter table public.expenses
+  add constraint expenses_category_valid
+  check (
+    category in (
+      'Oziq-ovqat',
+      'Transport',
+      'Kommunal',
+      'Uy-joy',
+      'Sog''liq',
+      'Ta''lim',
+      'Texnika',
+      'Kiyim-kechak',
+      'Bo''lib to''lash',
+      'Oilaviy yordam',
+      'Ko''ngilochar',
+      'Boshqa'
+    )
+  ) not valid;
 
 do $$
 begin
