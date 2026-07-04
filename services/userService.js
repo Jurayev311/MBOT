@@ -15,6 +15,56 @@ function getMonthKey(date = new Date()) {
   return `${year}-${month}`;
 }
 
+function getDateKey(date = new Date()) {
+  const timeZone = process.env.BOT_TIMEZONE || 'Asia/Tashkent';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeDateKey(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString().slice(0, 10) : null;
+  }
+
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : null;
+}
+
+function normalizeUsageType(inputType) {
+  return inputType === 'voice' ? 'voice' : 'text';
+}
+
+function getDailyUsageCount(user, inputType = 'text', date = new Date()) {
+  const usageType = normalizeUsageType(inputType);
+  const today = getDateKey(date);
+  const usageDate = normalizeDateKey(
+    usageType === 'voice' ? user?.daily_voice_usage_date : user?.daily_usage_date
+  );
+  const usageCount = Number(
+    usageType === 'voice' ? user?.daily_voice_usage_count : user?.daily_usage_count
+  );
+
+  if (usageDate !== today) {
+    return 0;
+  }
+
+  return Number.isInteger(usageCount) && usageCount > 0 ? usageCount : 0;
+}
+
 function normalizeTelegramId(telegramId) {
   const normalized = String(telegramId || '').trim();
 
@@ -204,6 +254,40 @@ async function expirePremium(userId) {
   return data;
 }
 
+async function incrementDailyUsage(user, amount = 1, inputType = 'text', date = new Date()) {
+  const usageType = normalizeUsageType(inputType);
+  const incrementBy = Number(amount || 0);
+
+  if (!user?.id || !Number.isInteger(incrementBy) || incrementBy <= 0) {
+    return user;
+  }
+
+  const today = getDateKey(date);
+  const nextCount = getDailyUsageCount(user, usageType, date) + incrementBy;
+  const payload = usageType === 'voice'
+    ? {
+      daily_voice_usage_count: nextCount,
+      daily_voice_usage_date: today
+    }
+    : {
+      daily_usage_count: nextCount,
+      daily_usage_date: today
+    };
+
+  const { data, error } = await supabase
+    .from('users')
+    .update(payload)
+    .eq('id', user.id)
+    .select('*')
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
 async function updateAwaitingPayment(userId, awaitingPayment) {
   const { data, error } = await supabase
     .from('users')
@@ -272,10 +356,51 @@ async function resetUserData(userId) {
   return data;
 }
 
+async function deleteUserCompletelyByTelegramId(telegramId) {
+  const normalizedId = normalizeTelegramId(telegramId);
+  const user = await getUserByTelegramId(normalizedId);
+
+  if (!user) {
+    const notFoundError = new Error('USER_NOT_FOUND');
+    notFoundError.code = 'USER_NOT_FOUND';
+    throw notFoundError;
+  }
+
+  const expensesDelete = await supabase
+    .from('expenses')
+    .delete()
+    .eq('user_id', user.id);
+
+  if (expensesDelete.error) {
+    throw expensesDelete.error;
+  }
+
+  const historyDelete = await supabase
+    .from('monthly_history')
+    .delete()
+    .eq('user_id', user.id);
+
+  if (historyDelete.error) {
+    throw historyDelete.error;
+  }
+
+  const userDelete = await supabase
+    .from('users')
+    .delete()
+    .eq('id', user.id);
+
+  if (userDelete.error) {
+    throw userDelete.error;
+  }
+
+  return user;
+}
+
 async function getAllUsers() {
   const { data, error } = await supabase
     .from('users')
-    .select('*');
+    .select('*')
+    .order('created_at', { ascending: false });
 
   if (error) {
     throw error;
@@ -306,12 +431,16 @@ async function saveMonthlyHistory({ userId, month, salary, totalSpent, savings }
 
 module.exports = {
   buildFullName,
+  deleteUserCompletelyByTelegramId,
   ensureUser,
   expirePremium,
   getAllUsers,
+  getDailyUsageCount,
+  getDateKey,
   getMonthKey,
   getPremiumExpiryDate,
   getUserByTelegramId,
+  incrementDailyUsage,
   isPremiumExpired,
   normalizeTelegramId,
   resetUserData,

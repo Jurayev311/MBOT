@@ -8,6 +8,10 @@ create table if not exists public.users (
   current_salary numeric default 0,
   daily_limit integer not null default 15 check (daily_limit > 0),
   daily_voice_limit integer not null default 2 check (daily_voice_limit > 0),
+  daily_usage_count integer not null default 0 check (daily_usage_count >= 0),
+  daily_usage_date date,
+  daily_voice_usage_count integer not null default 0 check (daily_voice_usage_count >= 0),
+  daily_voice_usage_date date,
   is_premium boolean not null default false,
   awaiting_payment boolean not null default false,
   premium_expires_at timestamp with time zone,
@@ -18,6 +22,10 @@ create table if not exists public.users (
 -- Migration for existing projects that already created public.users earlier.
 alter table public.users add column if not exists daily_limit integer default 15;
 alter table public.users add column if not exists daily_voice_limit integer default 2;
+alter table public.users add column if not exists daily_usage_count integer default 0;
+alter table public.users add column if not exists daily_usage_date date;
+alter table public.users add column if not exists daily_voice_usage_count integer default 0;
+alter table public.users add column if not exists daily_voice_usage_date date;
 alter table public.users add column if not exists is_premium boolean default false;
 alter table public.users add column if not exists awaiting_payment boolean default false;
 alter table public.users add column if not exists premium_expires_at timestamp with time zone;
@@ -27,10 +35,17 @@ update public.users set daily_limit = 15 where daily_limit is null;
 update public.users set daily_limit = 15 where is_premium = false and daily_limit = 10;
 update public.users set daily_voice_limit = case when is_premium = true then 10 else 2 end where daily_voice_limit is null;
 update public.users set daily_voice_limit = 10 where is_premium = true and daily_voice_limit = 2;
+update public.users set daily_usage_count = 0 where daily_usage_count is null;
+update public.users set daily_voice_usage_count = 0 where daily_voice_usage_count is null;
+update public.users set premium_expires_at = now() + interval '30 days' where is_premium = true and premium_expires_at is null;
 alter table public.users alter column daily_limit set default 15;
 alter table public.users alter column daily_limit set not null;
 alter table public.users alter column daily_voice_limit set default 2;
 alter table public.users alter column daily_voice_limit set not null;
+alter table public.users alter column daily_usage_count set default 0;
+alter table public.users alter column daily_usage_count set not null;
+alter table public.users alter column daily_voice_usage_count set default 0;
+alter table public.users alter column daily_voice_usage_count set not null;
 alter table public.users alter column is_premium set default false;
 alter table public.users alter column is_premium set not null;
 alter table public.users alter column awaiting_payment set default false;
@@ -59,6 +74,32 @@ begin
   ) then
     alter table public.users
       add constraint users_daily_voice_limit_positive check (daily_voice_limit > 0);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'users_daily_usage_count_nonnegative'
+      and conrelid = 'public.users'::regclass
+  ) then
+    alter table public.users
+      add constraint users_daily_usage_count_nonnegative check (daily_usage_count >= 0);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'users_daily_voice_usage_count_nonnegative'
+      and conrelid = 'public.users'::regclass
+  ) then
+    alter table public.users
+      add constraint users_daily_voice_usage_count_nonnegative check (daily_voice_usage_count >= 0);
   end if;
 end $$;
 

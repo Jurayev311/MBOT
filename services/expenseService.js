@@ -2,60 +2,6 @@ const { supabase } = require('../config/db');
 const { CATEGORIES } = require('./ai');
 const { getMonthKey } = require('./userService');
 
-function getTimeZoneParts(date, timeZone) {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(date);
-
-  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
-}
-
-function getTimeZoneOffsetMs(date, timeZone) {
-  const parts = getTimeZoneParts(date, timeZone);
-  const utcFromParts = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-    Number(parts.second)
-  );
-
-  return utcFromParts - date.getTime();
-}
-
-function zonedDateToUtc(year, month, day, timeZone) {
-  const utcGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
-  const offsetMs = getTimeZoneOffsetMs(utcGuess, timeZone);
-  return new Date(utcGuess.getTime() - offsetMs);
-}
-
-function getTodayBounds(date = new Date()) {
-  const timeZone = process.env.BOT_TIMEZONE || 'Asia/Tashkent';
-  const parts = getTimeZoneParts(date, timeZone);
-  const year = Number(parts.year);
-  const month = Number(parts.month);
-  const day = Number(parts.day);
-  const start = zonedDateToUtc(year, month, day, timeZone);
-  const endGuess = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0));
-  const endParts = getTimeZoneParts(endGuess, timeZone);
-  const end = zonedDateToUtc(
-    Number(endParts.year),
-    Number(endParts.month),
-    Number(endParts.day),
-    timeZone
-  );
-
-  return { start, end };
-}
-
 function sanitizeNote(note) {
   // Bazaga yoziladigan izohlar qisqa va bir qatorli saqlanadi.
   return String(note || '')
@@ -109,57 +55,6 @@ async function createExpense(userId, expense, month = getMonthKey(), inputType =
   }
 
   return data;
-}
-
-async function getTodayExpenseCount(userId, date = new Date(), inputType = 'text') {
-  const { start, end } = getTodayBounds(date);
-  const { count, error } = await supabase
-    .from('expenses')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .eq('input_type', normalizeInputType(inputType))
-    .gte('created_at', start.toISOString())
-    .lt('created_at', end.toISOString());
-
-  if (error) {
-    throw error;
-  }
-
-  return Number(count || 0);
-}
-
-async function getTodayVoiceExpenseCount(userId, date = new Date()) {
-  return getTodayExpenseCount(userId, date, 'voice');
-}
-
-async function getTodayExpenseCountsByUserIds(userIds, date = new Date(), inputType = 'text') {
-  const ids = [...new Set((userIds || []).filter(Boolean))];
-
-  if (!ids.length) {
-    return {};
-  }
-
-  const { start, end } = getTodayBounds(date);
-  const { data, error } = await supabase
-    .from('expenses')
-    .select('user_id')
-    .in('user_id', ids)
-    .eq('input_type', normalizeInputType(inputType))
-    .gte('created_at', start.toISOString())
-    .lt('created_at', end.toISOString());
-
-  if (error) {
-    throw error;
-  }
-
-  return (data || []).reduce((acc, expense) => {
-    acc[expense.user_id] = Number(acc[expense.user_id] || 0) + 1;
-    return acc;
-  }, {});
-}
-
-async function getTodayVoiceExpenseCountsByUserIds(userIds, date = new Date()) {
-  return getTodayExpenseCountsByUserIds(userIds, date, 'voice');
 }
 
 async function getMonthlyExpenses(userId, month = getMonthKey()) {
@@ -245,11 +140,6 @@ module.exports = {
   getMonthlyExpenses,
   getMonthlyHistory,
   getMonthlySummary,
-  getTodayBounds,
-  getTodayExpenseCount,
-  getTodayExpenseCountsByUserIds,
-  getTodayVoiceExpenseCount,
-  getTodayVoiceExpenseCountsByUserIds,
   sanitizeNote,
   validateExpense
 };

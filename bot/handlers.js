@@ -44,6 +44,12 @@ const FREE_DAILY_LIMIT = 15;
 const PREMIUM_DAILY_LIMIT = 50;
 const FREE_DAILY_VOICE_LIMIT = 2;
 const PREMIUM_DAILY_VOICE_LIMIT = 10;
+const ADMIN_USERS_PAGE_SIZE = 10;
+const ADMIN_LIST_PREFIX = 'adm_l_';
+const ADMIN_VIEW_PREFIX = 'adm_v_';
+const ADMIN_DELETE_ASK_PREFIX = 'adm_da_';
+const ADMIN_DELETE_DO_PREFIX = 'adm_dd_';
+const ADMIN_DELETE_CANCEL_PREFIX = 'adm_dc_';
 const rateBuckets = new Map();
 const userStates = new Map();
 const consumedCallbackMessages = new Map();
@@ -192,6 +198,47 @@ function parsePaymentReviewCallback(data) {
   return null;
 }
 
+function buildAdminCallback(prefix, page, telegramId = null) {
+  const safePage = Math.max(0, Number.parseInt(page, 10) || 0);
+  return telegramId === null
+    ? `${prefix}${safePage}`
+    : `${prefix}${safePage}_${telegramId}`;
+}
+
+function parseAdminStatsCallback(data) {
+  const value = String(data || '');
+  const listMatch = value.match(/^adm_l_(\d+)$/);
+
+  if (listMatch) {
+    return {
+      action: 'list',
+      page: Number(listMatch[1])
+    };
+  }
+
+  const actionMap = [
+    [ADMIN_VIEW_PREFIX, 'view'],
+    [ADMIN_DELETE_ASK_PREFIX, 'deleteAsk'],
+    [ADMIN_DELETE_DO_PREFIX, 'deleteDo'],
+    [ADMIN_DELETE_CANCEL_PREFIX, 'deleteCancel']
+  ];
+
+  for (const [prefix, action] of actionMap) {
+    const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = value.match(new RegExp(`^${escapedPrefix}(\\d+)_(\\d+)$`));
+
+    if (match) {
+      return {
+        action,
+        page: Number(match[1]),
+        telegramId: match[2]
+      };
+    }
+  }
+
+  return null;
+}
+
 function formatUserName(user, from = {}) {
   return user?.full_name || userService.buildFullName(from) || 'Nomaʼlum';
 }
@@ -213,6 +260,10 @@ function formatDateTime(date = new Date()) {
 }
 
 function formatDateOnly(dateInput) {
+  if (!dateInput) {
+    return "Noma'lum";
+  }
+
   const date = new Date(dateInput);
 
   if (!Number.isFinite(date.getTime())) {
@@ -231,14 +282,23 @@ function formatDateOnly(dateInput) {
 }
 
 function getRemainingDays(dateInput, now = new Date()) {
+  if (!dateInput) {
+    return null;
+  }
+
   const date = new Date(dateInput);
 
   if (!Number.isFinite(date.getTime())) {
-    return 0;
+    return null;
   }
 
   const dayMs = 24 * 60 * 60 * 1000;
   return Math.max(0, Math.ceil((date.getTime() - now.getTime()) / dayMs));
+}
+
+function formatRemainingDays(dateInput) {
+  const remainingDays = getRemainingDays(dateInput);
+  return remainingDays === null ? "Noma'lum" : `${remainingDays} kun`;
 }
 
 function getUserDailyLimit(user) {
@@ -414,7 +474,7 @@ function buildSettingsText(user, todayExpenseCount) {
       '',
       '💎 Status: Premium',
       `📅 Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`,
-      `⏳ Qolgan kunlar: ${getRemainingDays(user.premium_expires_at)} kun`,
+      `⏳ Qolgan kunlar: ${formatRemainingDays(user.premium_expires_at)}`,
       `📊 Bugungi limit: ${todayExpenseCount}/${dailyLimit} ta xarajat`,
       '',
       'Kerakli amalni tanlang:'
@@ -447,30 +507,171 @@ function formatStatsStatus(user) {
   return `Premium (tugaydi: ${formatDateOnly(user.premium_expires_at)})`;
 }
 
-function buildStatsText(users, todayExpenseCounts, todayVoiceExpenseCounts, todayAiUsageCount) {
+function formatStatsShortStatus(user) {
+  return user?.is_premium ? 'Premium' : 'Oddiy';
+}
+
+function truncateButtonText(text, maxLength = 58) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function getStatsTotalPages(users) {
+  return Math.max(1, Math.ceil(users.length / ADMIN_USERS_PAGE_SIZE));
+}
+
+function clampStatsPage(page, users) {
+  const parsedPage = Math.max(0, Number.parseInt(page, 10) || 0);
+  return Math.min(parsedPage, getStatsTotalPages(users) - 1);
+}
+
+function buildStatsHeader(users, todayAiUsageCount, notice = null) {
   const totalUsers = users.length;
   const premiumCount = users.filter((user) => user.is_premium).length;
   const regularCount = totalUsers - premiumCount;
-  const userLines = users.map((user, index) => {
-    const todayCount = Number(todayExpenseCounts[user.id] || 0);
-    const todayVoiceCount = Number(todayVoiceExpenseCounts[user.id] || 0);
-    const dailyLimit = getUserDailyLimit(user);
-    const dailyVoiceLimit = getUserDailyVoiceLimit(user);
-    return `${index + 1}. ${formatStatsUserName(user)} — ${formatStatsStatus(user)} — bugun: ${todayCount}/${dailyLimit} matn, ${todayVoiceCount}/${dailyVoiceLimit} ovoz`;
-  });
+  const lines = [];
 
-  return [
+  if (notice) {
+    lines.push(notice, '');
+  }
+
+  lines.push(
     '📊 Bot statistikasi',
     '',
     `👥 Jami foydalanuvchilar: ${totalUsers}`,
     `💎 Premium: ${premiumCount}`,
     `🆓 Oddiy: ${regularCount}`,
     '',
-    "Foydalanuvchilar ro'yxati:",
-    userLines.length ? userLines.join('\n') : "- Hali foydalanuvchi yo'q",
+    `🤖 Bugun AI so'rovlari: ${todayAiUsageCount}/500`,
     '',
-    `🤖 Bugun AI so'rovlari: ${todayAiUsageCount}/500 (Gemini kunlik limit)`
+    users.length
+      ? 'Foydalanuvchini boshqarish uchun tanlang:'
+      : "Hali foydalanuvchi yo'q."
+  );
+
+  return lines.join('\n');
+}
+
+function buildAdminUserButtonText(user) {
+  const todayCount = userService.getDailyUsageCount(user, 'text');
+  const dailyLimit = getUserDailyLimit(user);
+
+  return truncateButtonText(
+    `${formatStatsUserName(user)} — ${formatStatsShortStatus(user)} — bugun ${todayCount}/${dailyLimit}`
+  );
+}
+
+function buildStatsKeyboard(users, page) {
+  const currentPage = clampStatsPage(page, users);
+  const startIndex = currentPage * ADMIN_USERS_PAGE_SIZE;
+  const pageUsers = users.slice(startIndex, startIndex + ADMIN_USERS_PAGE_SIZE);
+  const rows = pageUsers
+    .filter((user) => user?.telegram_id)
+    .map((user) => ([{
+      text: buildAdminUserButtonText(user),
+      callback_data: buildAdminCallback(ADMIN_VIEW_PREFIX, currentPage, user.telegram_id)
+    }]));
+
+  const navigationRow = [];
+
+  if (currentPage > 0) {
+    navigationRow.push({
+      text: '⬅️ Oldingi',
+      callback_data: buildAdminCallback(ADMIN_LIST_PREFIX, currentPage - 1)
+    });
+  }
+
+  if (currentPage < getStatsTotalPages(users) - 1) {
+    navigationRow.push({
+      text: 'Keyingi ➡️',
+      callback_data: buildAdminCallback(ADMIN_LIST_PREFIX, currentPage + 1)
+    });
+  }
+
+  if (navigationRow.length) {
+    rows.push(navigationRow);
+  }
+
+  return rows;
+}
+
+function buildStatsMessage(users, todayAiUsageCount, page = 0, notice = null) {
+  const currentPage = clampStatsPage(page, users);
+
+  return {
+    text: buildStatsHeader(users, todayAiUsageCount, notice),
+    options: {
+      reply_markup: {
+        inline_keyboard: buildStatsKeyboard(users, currentPage)
+      }
+    },
+    page: currentPage
+  };
+}
+
+function buildAdminUserDetailsText(user) {
+  const todayCount = userService.getDailyUsageCount(user, 'text');
+  const todayVoiceCount = userService.getDailyUsageCount(user, 'voice');
+  const dailyLimit = getUserDailyLimit(user);
+  const dailyVoiceLimit = getUserDailyVoiceLimit(user);
+
+  return [
+    `👤 ${formatStatsUserName(user)}`,
+    `Telegram ID: ${user.telegram_id}`,
+    `Status: ${formatStatsStatus(user)}`,
+    `Bugungi limit: ${todayCount}/${dailyLimit} (matn), ${todayVoiceCount}/${dailyVoiceLimit} (ovoz)`,
+    `Ro'yxatdan o'tgan: ${formatDateOnly(user.created_at)}`,
+    '',
+    'Amalni tanlang:'
   ].join('\n');
+}
+
+function buildAdminUserDetailsMarkup(user, page) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{
+          text: "🗑️ Foydalanuvchini o'chirish",
+          callback_data: buildAdminCallback(ADMIN_DELETE_ASK_PREFIX, page, user.telegram_id)
+        }],
+        [{
+          text: '⬅️ Ortga',
+          callback_data: buildAdminCallback(ADMIN_LIST_PREFIX, page)
+        }]
+      ]
+    }
+  };
+}
+
+function buildAdminDeleteConfirmText(user) {
+  return [
+    `⚠️ Rostdan ham ${formatStatsUserName(user)} ni butunlay o'chirmoqchimisiz?`,
+    "Uning barcha ma'lumotlari (xarajatlar, tarix, profil) butunlay o'chadi va qaytarib bo'lmaydi."
+  ].join('\n');
+}
+
+function buildAdminDeleteConfirmMarkup(user, page) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "Ha, o'chirish",
+            callback_data: buildAdminCallback(ADMIN_DELETE_DO_PREFIX, page, user.telegram_id)
+          },
+          {
+            text: 'Bekor qilish',
+            callback_data: buildAdminCallback(ADMIN_DELETE_CANCEL_PREFIX, page, user.telegram_id)
+          }
+        ]
+      ]
+    }
+  };
 }
 
 function formatExpenseLabel(expense) {
@@ -535,6 +736,44 @@ async function sendLongMessage(bot, chatId, text) {
   for (const chunk of chunks) {
     await bot.sendMessage(chatId, chunk, MAIN_KEYBOARD);
   }
+}
+
+async function editCallbackMessageText(bot, query, text, options = {}) {
+  const chatId = query.message?.chat?.id;
+  const messageId = query.message?.message_id;
+
+  if (!chatId || !messageId) {
+    return;
+  }
+
+  try {
+    await bot.editMessageText(text, {
+      chat_id: chatId,
+      message_id: messageId,
+      ...options
+    });
+  } catch (error) {
+    const message = String(error?.message || '');
+
+    if (!message.includes('message is not modified') && !message.includes('message to edit not found')) {
+      throw error;
+    }
+  }
+}
+
+async function getStatsData() {
+  const [users, todayAiUsageCount] = await Promise.all([
+    userService.getAllUsers(),
+    apiUsageService.getTodayApiUsageCount()
+  ]);
+
+  return { users, todayAiUsageCount };
+}
+
+async function editStatsListMessage(bot, query, page = 0, notice = null) {
+  const { users, todayAiUsageCount } = await getStatsData();
+  const message = buildStatsMessage(users, todayAiUsageCount, page, notice);
+  await editCallbackMessageText(bot, query, message.text, message.options);
 }
 
 async function handleStart(bot, msg) {
@@ -612,7 +851,7 @@ async function handleSalaryInput(bot, chatId, telegramId, user, text, nextState 
 }
 
 async function handleSettings(bot, chatId, user) {
-  const todayExpenseCount = await expenseService.getTodayExpenseCount(user.id);
+  const todayExpenseCount = userService.getDailyUsageCount(user, 'text');
 
   await bot.sendMessage(
     chatId,
@@ -629,19 +868,10 @@ async function handleStatsCommand(bot, msg) {
   const chatId = getChatId(msg);
 
   try {
-    const users = await userService.getAllUsers();
-    const userIds = users.map((user) => user.id);
-    const [todayExpenseCounts, todayVoiceExpenseCounts, todayAiUsageCount] = await Promise.all([
-      expenseService.getTodayExpenseCountsByUserIds(userIds),
-      expenseService.getTodayVoiceExpenseCountsByUserIds(userIds),
-      apiUsageService.getTodayApiUsageCount()
-    ]);
+    const { users, todayAiUsageCount } = await getStatsData();
+    const message = buildStatsMessage(users, todayAiUsageCount);
 
-    await sendLongMessage(
-      bot,
-      chatId,
-      buildStatsText(users, todayExpenseCounts, todayVoiceExpenseCounts, todayAiUsageCount)
-    );
+    await bot.sendMessage(chatId, message.text, message.options);
   } catch (error) {
     console.error('/stats xatosi:', error);
     await bot.sendMessage(chatId, "Statistikani olishda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
@@ -658,7 +888,7 @@ async function handleExpenseText(bot, chatId, user, text) {
 
   try {
     const dailyLimit = getUserDailyLimit(user);
-    const todayExpenseCount = await expenseService.getTodayExpenseCount(user.id);
+    const todayExpenseCount = userService.getDailyUsageCount(user, 'text');
 
     if (todayExpenseCount >= dailyLimit) {
       await bot.sendMessage(
@@ -698,6 +928,8 @@ async function handleExpenseText(bot, chatId, user, text) {
       const savedExpense = await expenseService.createExpense(user.id, expense, month);
       savedExpenses.push(savedExpense);
     }
+
+    await userService.incrementDailyUsage(user, savedExpenses.length, 'text');
 
     const summary = await expenseService.getMonthlySummary(user.id, month);
     const balance = Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
@@ -761,7 +993,7 @@ async function handleVoice(bot, msg) {
     }
 
     const dailyVoiceLimit = getUserDailyVoiceLimit(user);
-    const todayVoiceCount = await expenseService.getTodayVoiceExpenseCount(user.id);
+    const todayVoiceCount = userService.getDailyUsageCount(user, 'voice');
 
     if (todayVoiceCount >= dailyVoiceLimit) {
       await sendVoiceLimitReachedMessage(bot, chatId, user, todayVoiceCount, dailyVoiceLimit);
@@ -781,6 +1013,7 @@ async function handleVoice(bot, msg) {
     const parsedExpense = await categorizeVoiceExpense(fileUrl, voice.mime_type || 'audio/ogg');
     const month = user.current_month || userService.getMonthKey();
     const savedExpense = await expenseService.createExpense(user.id, parsedExpense, month, 'voice');
+    await userService.incrementDailyUsage(user, 1, 'voice');
     const summary = await expenseService.getMonthlySummary(user.id, month);
     const balance = Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
 
@@ -897,6 +1130,74 @@ async function handlePremiumCommand(bot, msg, match, enabled) {
   }
 }
 
+async function handleAdminStatsCallback(bot, query, adminCallback) {
+  if (!isAdminUser(query.from)) {
+    await answerCallback(bot, query, 'Bu tugma siz uchun emas.');
+    return;
+  }
+
+  await answerCallback(bot, query);
+
+  const page = Math.max(0, Number.parseInt(adminCallback.page, 10) || 0);
+
+  if (adminCallback.action === 'list') {
+    await editStatsListMessage(bot, query, page);
+    return;
+  }
+
+  if (!/^\d+$/.test(String(adminCallback.telegramId || ''))) {
+    await editStatsListMessage(bot, query, page, "Telegram ID noto'g'ri.");
+    return;
+  }
+
+  if (adminCallback.action === 'deleteDo') {
+    try {
+      const deletedUser = await userService.deleteUserCompletelyByTelegramId(adminCallback.telegramId);
+      await editStatsListMessage(
+        bot,
+        query,
+        page,
+        `✅ ${formatStatsUserName(deletedUser)} muvaffaqiyatli o'chirildi`
+      );
+    } catch (error) {
+      if (error.code === 'USER_NOT_FOUND') {
+        await editStatsListMessage(bot, query, page, "Foydalanuvchi allaqachon o'chirilgan.");
+        return;
+      }
+
+      throw error;
+    }
+
+    return;
+  }
+
+  const user = await userService.getUserByTelegramId(adminCallback.telegramId);
+
+  if (!user) {
+    await editStatsListMessage(bot, query, page, "Foydalanuvchi topilmadi yoki allaqachon o'chirilgan.");
+    return;
+  }
+
+  if (adminCallback.action === 'view' || adminCallback.action === 'deleteCancel') {
+    await editCallbackMessageText(
+      bot,
+      query,
+      buildAdminUserDetailsText(user),
+      buildAdminUserDetailsMarkup(user, page)
+    );
+    return;
+  }
+
+  if (adminCallback.action === 'deleteAsk') {
+    await editCallbackMessageText(
+      bot,
+      query,
+      buildAdminDeleteConfirmText(user),
+      buildAdminDeleteConfirmMarkup(user, page)
+    );
+  }
+}
+
 async function handleCallback(bot, query) {
   const chatId = query.message?.chat?.id;
   const telegramId = getTelegramId(query.from);
@@ -905,6 +1206,13 @@ async function handleCallback(bot, query) {
   try {
     if (!chatId) {
       await answerCallback(bot, query);
+      return;
+    }
+
+    const adminStatsCallback = parseAdminStatsCallback(query.data);
+
+    if (adminStatsCallback) {
+      await handleAdminStatsCallback(bot, query, adminStatsCallback);
       return;
     }
 
