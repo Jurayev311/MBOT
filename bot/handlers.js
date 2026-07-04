@@ -1,4 +1,4 @@
-const { categorizeExpense, categorizeVoiceExpense, generateAdvice } = require('../services/ai');
+const { categorizeExpense, categorizeVoiceExpense, generateAdvice, generatePlanGoalAnalysis } = require('../services/ai');
 const apiUsageService = require('../services/apiUsageService');
 const expenseService = require('../services/expenseService');
 const userService = require('../services/userService');
@@ -8,7 +8,8 @@ const MAIN_KEYBOARD = {
   reply_markup: {
     keyboard: [
       ['📊 Hisobot', '💰 Maosh'],
-      ['🤖 AI Tahlil', '⚙️ Sozlamalar']
+      ['🤖 AI Tahlil', '⚙️ Sozlamalar'],
+      ['🎯 Reja va Maqsad']
     ],
     resize_keyboard: true,
     one_time_keyboard: false
@@ -54,6 +55,7 @@ const EXPENSE_EDIT_PREFIX = 'exed_';
 const EXPENSE_DELETE_PREFIX = 'exdel_';
 const EXPENSE_DELETE_CONFIRM_PREFIX = 'exok_';
 const EXPENSE_DELETE_CANCEL_PREFIX = 'excn_';
+const PLAN_GOAL_CANCEL_CALLBACK = 'plan_goal_cancel';
 const rateBuckets = new Map();
 const userStates = new Map();
 const consumedCallbackMessages = new Map();
@@ -164,6 +166,16 @@ function getPaymentStartMarkup() {
     reply_markup: {
       inline_keyboard: [
         [{ text: "💳 To'lov qildim, chek yuboraman", callback_data: PAYMENT_START_CALLBACK }]
+      ]
+    }
+  };
+}
+
+function getPlanGoalCancelMarkup() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '❌ Bekor qilish', callback_data: PLAN_GOAL_CANCEL_CALLBACK }]
       ]
     }
   };
@@ -457,6 +469,14 @@ function parsePositiveAmount(text) {
   return Number.isFinite(amount) && amount > 0 ? amount : null;
 }
 
+function isPlanGoalButtonText(text) {
+  return String(text || '')
+    .replace(/\uFE0F/g, '')
+    .trim()
+    .toLowerCase()
+    .includes('reja va maqsad');
+}
+
 function formatReport(user, summary) {
   const salary = Number(user.current_salary || 0);
   const totalSpent = Number(summary.totalSpent || 0);
@@ -493,7 +513,9 @@ function buildSalarySavedText(salary) {
     '   📝 Matn orqali: kuniga 50 ta xarajat',
     '   🎤 Ovozli xabar: kuniga 10 ta',
     '',
-    "Bepul limitingiz tugagach, premium tarifga o'tish taklif qilinadi."
+    "Bepul limitingiz tugagach, premium tarifga o'tish taklif qilinadi.",
+    '',
+    buildPremiumShortcutText()
   ].join('\n');
 }
 
@@ -506,7 +528,64 @@ function buildSalaryPromptText(name) {
 }
 
 function buildStartWelcomeText(user) {
-  return `Xush kelibsiz, ${getDisplayName(user)}! Xarajatingizni yozing yoki pastdagi tugmalardan foydalaning.`;
+  return [
+    `Xush kelibsiz, ${getDisplayName(user)}! Xarajatingizni yozing yoki pastdagi tugmalardan foydalaning.`,
+    '',
+    "Istasangiz, limitingiz tugashini kutmasdan, istalgan vaqtda /premium_narxi buyrug'i orqali premium tarifga o'tishingiz mumkin."
+  ].join('\n');
+}
+
+function buildPremiumShortcutText() {
+  return "Istasangiz, limitingiz tugashini kutmasdan, istalgan vaqtda /premium_narxi buyrug'i orqali premium tarifga o'tishingiz mumkin.";
+}
+
+function buildPremiumPriceText() {
+  return [
+    '💎 Premium tarif',
+    '',
+    '📝 Matn orqali: kuniga 50 ta xarajat',
+    '🎤 Ovozli xabar: kuniga 10 ta',
+    '🎯 Reja va Maqsad tahlili (yangi!)',
+    '',
+    `💳 Karta: ${getPaymentCardNumber()}`,
+    `💰 Narxi: ${formatPaymentPrice()} so'm/oy`,
+    '',
+    "To'lov qilgach, pastdagi tugmani bosib, chek rasmini yuboring."
+  ].join('\n');
+}
+
+function buildPlanGoalPremiumOnlyText() {
+  return [
+    '🎯 Bu funksiya faqat premium foydalanuvchilar uchun mavjud.',
+    '',
+    "Premium tarifga o'tish uchun: /premium_narxi"
+  ].join('\n');
+}
+
+function buildPlanGoalIntroText() {
+  return [
+    '🎯 Reja va Maqsad',
+    '',
+    'Bu yerda keyingi oy uchun rejalashtirgan barcha xarajatlaringizni va maqsadingizni (masalan yangi telefon olish) yozib, AI tahlilini olishingiz mumkin.',
+    '',
+    "⚠️ Diqqat: bu ma'lumotlar SAQLANMAYDI. Bu faqat bir martalik tahlil uchun, botning asosiy hisobotiga ta'sir qilmaydi. Har safar bu bo'limga kirganingizda, ma'lumotlarni qaytadan yozishingiz kerak bo'ladi.",
+    '',
+    'Rejangizni va maqsadingizni bitta xabarda yozing. Masalan:',
+    '',
+    "'Oziq-ovqat 800000, Transport 300000, Kommunal 500000, Uy-joy 1200000. Maqsad: telefon olmoqchiman, narxi 2500000, 3 oyga 836000 dan bo'lib to'lash mumkin.'",
+    '',
+    "Yoki oddiyroq: 'Bu oy 3500000 sarflayman, telefon uchun 2.5 million kerak, naqd olsam bo'ladimi?'"
+  ].join('\n');
+}
+
+function buildPlanGoalResultText(analysisText) {
+  return [
+    '📊 Tahlil natijasi:',
+    '',
+    String(analysisText || '').trim(),
+    '',
+    "⚠️ Eslatma: bu ma'lumotlar saqlanmadi. Qaytadan tahlil qilish uchun '🎯 Reja va Maqsad' tugmasini yana bosishingiz kerak bo'ladi."
+  ].join('\n');
 }
 
 function buildLimitReachedText(dailyLimit) {
@@ -516,7 +595,9 @@ function buildLimitReachedText(dailyLimit) {
     `💳 Karta: ${getPaymentCardNumber()}`,
     `💰 Narxi: ${formatPaymentPrice()} so'm/oy`,
     '',
-    "To'lov qilgach, pastdagi tugmani bosib, chek rasmini yuboring."
+    "To'lov qilgach, pastdagi tugmani bosib, chek rasmini yuboring.",
+    '',
+    buildPremiumShortcutText()
   ].join('\n');
 }
 
@@ -528,7 +609,9 @@ function buildFreeVoiceLimitReachedText(usedCount, dailyVoiceLimit) {
     `💳 Karta: ${getPaymentCardNumber()}`,
     `💰 Narxi: ${formatPaymentPrice()} so'm/oy`,
     '',
-    'Yoki xarajatni matn bilan yozing (masalan: 25000 nonga).'
+    'Yoki xarajatni matn bilan yozing (masalan: 25000 nonga).',
+    '',
+    buildPremiumShortcutText()
   ].join('\n');
 }
 
@@ -915,6 +998,75 @@ async function handleAnalysis(bot, chatId, user) {
   }
 }
 
+async function handlePlanGoalStart(bot, chatId, telegramId, user) {
+  if (!user?.is_premium) {
+    await bot.sendMessage(chatId, buildPlanGoalPremiumOnlyText(), MAIN_KEYBOARD);
+    return;
+  }
+
+  clearUserState(telegramId);
+  setUserState(telegramId, 'awaiting_plan_goal');
+  await bot.sendMessage(chatId, buildPlanGoalIntroText(), getPlanGoalCancelMarkup());
+}
+
+async function handlePlanGoalInput(bot, chatId, telegramId, user, text) {
+  const planText = String(text || '').trim();
+
+  if (!user?.is_premium) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, buildPlanGoalPremiumOnlyText(), MAIN_KEYBOARD);
+    return;
+  }
+
+  if (!planText || planText.length < 10) {
+    await bot.sendMessage(chatId, "Rejangizni biroz batafsilroq yozing. Masalan: Oziq-ovqat 800000, Transport 300000, Maqsad: telefon.", getPlanGoalCancelMarkup());
+    return;
+  }
+
+  if (planText.length > 1200) {
+    await bot.sendMessage(chatId, "Reja matni juda uzun. Iltimos, 1200 belgidan oshirmay qisqaroq yozing.", getPlanGoalCancelMarkup());
+    return;
+  }
+
+  const dailyLimit = getUserDailyLimit(user);
+  const todayUsageCount = userService.getDailyUsageCount(user, 'text');
+
+  if (todayUsageCount >= dailyLimit) {
+    clearUserState(telegramId);
+    await bot.sendMessage(
+      chatId,
+      `Bugungi premium limitingiz tugadi (${todayUsageCount}/${dailyLimit}). Ertaga yana foydalanishingiz mumkin.`,
+      MAIN_KEYBOARD
+    );
+    return;
+  }
+
+  try {
+    await bot.sendMessage(chatId, "Rejangiz AI orqali tahlil qilinmoqda, bir necha soniya kuting...", MAIN_KEYBOARD);
+
+    const month = user.current_month || userService.getMonthKey();
+    const summary = await expenseService.getMonthlySummary(user.id, month);
+    const analysis = await generatePlanGoalAnalysis({
+      planText,
+      salary: Number(user.current_salary || 0),
+      totalSpent: Number(summary.totalSpent || 0)
+    });
+
+    await userService.incrementDailyUsage(user, 1, 'text');
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, buildPlanGoalResultText(analysis), MAIN_KEYBOARD);
+  } catch (error) {
+    console.error('Reja va Maqsad tahlilida xato:', error);
+    clearUserState(telegramId);
+
+    await bot.sendMessage(
+      chatId,
+      error.userMessage || "Hozir reja tahlilini qila olmadim, birozdan keyin qayta urinib ko'ring.",
+      MAIN_KEYBOARD
+    );
+  }
+}
+
 async function handleSalaryInput(bot, chatId, telegramId, user, text, nextState = null) {
   const amount = parsePositiveAmount(text);
 
@@ -1223,6 +1375,28 @@ async function handlePremiumCommand(bot, msg, match, enabled) {
   }
 }
 
+async function handlePremiumPriceCommand(bot, msg) {
+  const chatId = getChatId(msg);
+
+  try {
+    const user = await userService.ensureUser(msg.from);
+
+    if (user?.is_premium) {
+      await bot.sendMessage(
+        chatId,
+        `Siz allaqachon premium foydalanuvchisiz! Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`,
+        MAIN_KEYBOARD
+      );
+      return;
+    }
+
+    await bot.sendMessage(chatId, buildPremiumPriceText(), getPaymentStartMarkup());
+  } catch (error) {
+    console.error('/premium_narxi xatosi:', error);
+    await bot.sendMessage(chatId, "Premium tarif ma'lumotini olishda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
+  }
+}
+
 async function handleAdminStatsCallback(bot, query, adminCallback) {
   if (!isAdminUser(query.from)) {
     await answerCallback(bot, query, 'Bu tugma siz uchun emas.');
@@ -1445,6 +1619,13 @@ async function handleCallback(bot, query) {
       return;
     }
 
+    if (query.data === PLAN_GOAL_CANCEL_CALLBACK) {
+      await consumeCallbackMessage(bot, query, callbackKey);
+      clearUserState(telegramId);
+      await bot.sendMessage(chatId, 'Bekor qilindi.', MAIN_KEYBOARD);
+      return;
+    }
+
     if (query.data === 'settings_change_name') {
       await consumeCallbackMessage(bot, query, callbackKey);
       setUserState(telegramId, 'awaiting_name');
@@ -1643,6 +1824,11 @@ async function handleMessage(bot, msg) {
       return;
     }
 
+    if (state?.type === 'awaiting_plan_goal') {
+      await handlePlanGoalInput(bot, chatId, telegramId, user, normalizedText);
+      return;
+    }
+
     if (!hasFullName(user)) {
       setUserState(telegramId, 'awaiting_start_name');
       await bot.sendMessage(chatId, buildNamePromptText(), MAIN_KEYBOARD);
@@ -1670,6 +1856,11 @@ async function handleMessage(bot, msg) {
       return;
     }
 
+    if (isPlanGoalButtonText(normalizedText)) {
+      await handlePlanGoalStart(bot, chatId, telegramId, user);
+      return;
+    }
+
     if (Number(user.current_salary || 0) <= 0) {
       const amount = parsePositiveAmount(normalizedText);
 
@@ -1693,6 +1884,7 @@ async function handleMessage(bot, msg) {
 function registerHandlers(bot) {
   bot.onText(/^\/start$/, (msg) => handleStart(bot, msg));
   bot.onText(/^\/stats$/, (msg) => handleStatsCommand(bot, msg));
+  bot.onText(/^\/premium_narxi$/, (msg) => handlePremiumPriceCommand(bot, msg));
   bot.onText(/^\/premium\s+(\d+)$/, (msg, match) => handlePremiumCommand(bot, msg, match, true));
   bot.onText(/^\/removepremium\s+(\d+)$/, (msg, match) => handlePremiumCommand(bot, msg, match, false));
   bot.onText(/^\/help$/, (msg) => {

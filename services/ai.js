@@ -32,6 +32,7 @@ const FLEXIBLE_CATEGORIES = [...SIMPLE_FLEXIBLE_CATEGORIES, ...EASY_FLEXIBLE_CAT
 const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
 const AI_BUSY_MESSAGE = "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.";
 const AI_ANALYSIS_UNAVAILABLE_MESSAGE = "Hozir tahlil qila olmadim, birozdan keyin qayta urinib ko'ring";
+const PLAN_GOAL_UNAVAILABLE_MESSAGE = "Hozir reja tahlilini qila olmadim, birozdan keyin qayta urinib ko'ring.";
 const GEMINI_MIN_INTERVAL_MS = 300;
 const GEMINI_RETRY_DELAY_MS = 2000;
 const AMOUNT_PATTERN = /\b\d{1,3}(?:[ .]\d{3})+(?:[,.]\d+)?\b|\b\d+(?:[,.]\d+)?\b/;
@@ -152,6 +153,14 @@ function createAnalysisUnavailableError(cause) {
   const error = new Error('AI_ANALYSIS_UNAVAILABLE');
   error.code = 'AI_ANALYSIS_UNAVAILABLE';
   error.userMessage = AI_ANALYSIS_UNAVAILABLE_MESSAGE;
+  error.cause = cause;
+  return error;
+}
+
+function createPlanGoalUnavailableError(cause) {
+  const error = new Error('PLAN_GOAL_UNAVAILABLE');
+  error.code = 'PLAN_GOAL_UNAVAILABLE';
+  error.userMessage = PLAN_GOAL_UNAVAILABLE_MESSAGE;
   error.cause = cause;
   return error;
 }
@@ -872,6 +881,57 @@ async function generateAdvice(userData) {
   }
 }
 
+function buildPlanGoalPrompt({ planText, salary, totalSpent }) {
+  return [
+    "Sen moliyaviy maslahatchisan. Foydalanuvchi keyingi oy uchun quyidagi rejani yozdi:",
+    '',
+    String(planText || '').trim(),
+    '',
+    "Foydalanuvchining joriy holati (kontekst uchun, taqqoslash uchun):",
+    `Oylik maosh: ${formatMoney(salary)}`,
+    `Shu oy haqiqiy xarajati: ${formatMoney(totalSpent)}`,
+    '',
+    'Vazifang:',
+    '1. Yozilgan reja xarajatlarini jamla, umumiy summani hisobla.',
+    '2. Agar reja jami maoshdan oshib ketsa, buni aniq ayt va qancha oshib ketganini hisobla.',
+    '3. Agar rejada "maqsad" (masalan biror narsa sotib olish) aytilgan bo\'lsa, bu narsani hozir sotib olish (naqd yoki bo\'lib to\'lash) maqbul yoki maqbul emasligini hisobla va ayt.',
+    "4. Agar bo'lib to'lash summasi berilgan bo'lsa, bu summa reja bilan birga qo'shilganda byudjetga qanday ta'sir qilishini hisobla.",
+    '',
+    'QISQA (maksimal 5-6 jumla), aniq va amaliy javob yoz. Raqamlarga asoslan, umumiy gaplar yozma.'
+  ].join('\n');
+}
+
+async function generatePlanGoalAnalysis(planData) {
+  const prompt = buildPlanGoalPrompt(planData);
+
+  debugAi('generatePlanGoalAnalysis.model', getConfiguredModelName());
+
+  try {
+    const result = await callGeminiWithRetry('generatePlanGoalAnalysis', () => getGeminiModel().generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.15,
+        maxOutputTokens: 260
+      }
+    }));
+
+    await logApiUsageSafely();
+    const rawText = result.response.text();
+    debugAi('generatePlanGoalAnalysis.rawResponse', rawText);
+    debugAi('generatePlanGoalAnalysis.finishReason', result.response.candidates?.[0]?.finishReason);
+
+    return truncateAdviceText(rawText, 800);
+  } catch (error) {
+    debugAi('generatePlanGoalAnalysis.requestError', {
+      model: geminiModelName || getConfiguredModelName(),
+      message: error.message,
+      status: error.status || error.code
+    });
+
+    throw createPlanGoalUnavailableError(error);
+  }
+}
+
 module.exports = {
   CATEGORIES,
   FIXED_CATEGORIES,
@@ -880,13 +940,16 @@ module.exports = {
   FLEXIBLE_CATEGORIES,
   AI_BUSY_MESSAGE,
   AI_ANALYSIS_UNAVAILABLE_MESSAGE,
+  PLAN_GOAL_UNAVAILABLE_MESSAGE,
   DEFAULT_GEMINI_MODEL,
   buildAnalysisPrompt,
   buildAdviceMetrics,
   buildGeminiAdviceResponse,
+  buildPlanGoalPrompt,
   categorizeExpense,
   categorizeVoiceExpense,
   generateLocalAdvice,
+  generatePlanGoalAnalysis,
   parseExpenseLocally,
   parseExpensesLocally,
   generateAdvice
