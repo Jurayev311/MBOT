@@ -8,7 +8,7 @@ const MAIN_KEYBOARD = {
   reply_markup: {
     keyboard: [
       ['📊 Hisobot', '💰 Maosh'],
-      ['📈 Tahlil', '⚙️ Sozlamalar']
+      ['🤖 AI Tahlil', '⚙️ Sozlamalar']
     ],
     resize_keyboard: true,
     one_time_keyboard: false
@@ -1419,7 +1419,7 @@ async function handleMessage(bot, msg) {
       return;
     }
 
-    if (normalizedText === '📈 Tahlil') {
+    if (normalizedText === '🤖 AI Tahlil') {
       await handleAnalysis(bot, chatId, user);
       return;
     }

@@ -106,7 +106,7 @@ Kunlik cron muddati tugagan premiumlarni avtomatik oddiy tarifga qaytaradi.
 - Erkin xarajat matni Gemini'ga yuboriladi va `{ amount, category, note }` sifatida qaytadi.
 - Gemini modeli uchun so'rovlar orasida 300ms oraliq bor; 429 yoki QuotaFailure bo'lsa 2 soniyadan keyin 1 marta qayta uriniladi.
 - Xarajat `expenses` jadvaliga yoziladi; `input_type` ustuni matnli xarajatlar uchun `text`, ovozli xarajatlar uchun `voice` bo'ladi.
-- ReplyKeyboard doim 4 ta tugmani ko'rsatadi: `📊 Hisobot`, `💰 Maosh`, `📈 Tahlil`, `⚙️ Sozlamalar`.
+- ReplyKeyboard doim 4 ta tugmani ko'rsatadi: `📊 Hisobot`, `💰 Maosh`, `🤖 AI Tahlil`, `⚙️ Sozlamalar`.
 - `node-cron` har kuni soat 09:00 da oy almashganini tekshiradi, eski oy yakunini `monthly_history` ga yozadi va foydalanuvchidan maoshni tasdiqlashni so'raydi.
 
 ## Render.com Deploy
