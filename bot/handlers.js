@@ -56,6 +56,7 @@ const EXPENSE_DELETE_PREFIX = 'exdel_';
 const EXPENSE_DELETE_CONFIRM_PREFIX = 'exok_';
 const EXPENSE_DELETE_CANCEL_PREFIX = 'excn_';
 const PLAN_GOAL_CANCEL_CALLBACK = 'plan_goal_cancel';
+const PLAN_GOAL_LIMIT_COST = 15;
 const rateBuckets = new Map();
 const userStates = new Map();
 const consumedCallbackMessages = new Map();
@@ -566,15 +567,27 @@ function buildPlanGoalIntroText() {
   return [
     '🎯 Reja va Maqsad',
     '',
-    'Bu yerda keyingi oy uchun rejalashtirgan barcha xarajatlaringizni va maqsadingizni (masalan yangi telefon olish) yozib, AI tahlilini olishingiz mumkin.',
+    "Keyingi oy uchun xarajat rejangizni va maqsadingizni yozing — AI sizga tahlil beradi.",
     '',
-    "⚠️ Diqqat: bu ma'lumotlar SAQLANMAYDI. Bu faqat bir martalik tahlil uchun, botning asosiy hisobotiga ta'sir qilmaydi. Har safar bu bo'limga kirganingizda, ma'lumotlarni qaytadan yozishingiz kerak bo'ladi.",
+    "⚠️ Bu ma'lumot saqlanmaydi va limitdan 15 ta hisoblanadi.",
     '',
-    'Rejangizni va maqsadingizni bitta xabarda yozing. Masalan:',
+    "Avval, keyingi oy uchun kutilayotgan daromadingizni kiriting (so'mda):"
+  ].join('\n');
+}
+
+function buildPlanGoalIncomeSavedText(income) {
+  return [
+    `✅ Daromad: ${formatMoney(income)}`,
     '',
-    "'Oziq-ovqat 800000, Transport 300000, Kommunal 500000, Uy-joy 1200000. Maqsad: telefon olmoqchiman, narxi 2500000, 3 oyga 836000 dan bo'lib to'lash mumkin.'",
-    '',
-    "Yoki oddiyroq: 'Bu oy 3500000 sarflayman, telefon uchun 2.5 million kerak, naqd olsam bo'ladimi?'"
+    "Endi xarajat rejangizni va maqsadingizni yozing. Misol:",
+    "'Oziq-ovqat 800000, Uy-joy 1200000. Telefon 2.5mln, 3 oyga 836000 dan bo'lib to'lash mumkinmi?'"
+  ].join('\n');
+}
+
+function buildPlanGoalLimitRequiredText(remainingLimit) {
+  return [
+    `Bu funksiya uchun ${PLAN_GOAL_LIMIT_COST} ta limit kerak, lekin sizda bugun faqat ${remainingLimit} ta qoldi.`,
+    "Ertaga qayta urinib ko'ring."
   ].join('\n');
 }
 
@@ -1004,17 +1017,61 @@ async function handlePlanGoalStart(bot, chatId, telegramId, user) {
     return;
   }
 
+  const dailyLimit = getUserDailyLimit(user);
+  const todayUsageCount = userService.getDailyUsageCount(user, 'text');
+  const remainingLimit = Math.max(0, dailyLimit - todayUsageCount);
+
+  if (remainingLimit < PLAN_GOAL_LIMIT_COST) {
+    await bot.sendMessage(chatId, buildPlanGoalLimitRequiredText(remainingLimit), MAIN_KEYBOARD);
+    return;
+  }
+
   clearUserState(telegramId);
-  setUserState(telegramId, 'awaiting_plan_goal');
+  setUserState(telegramId, 'awaiting_plan_goal_income');
   await bot.sendMessage(chatId, buildPlanGoalIntroText(), getPlanGoalCancelMarkup());
 }
 
-async function handlePlanGoalInput(bot, chatId, telegramId, user, text) {
+async function handlePlanGoalIncomeInput(bot, chatId, telegramId, user, text) {
+  if (!user?.is_premium) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, buildPlanGoalPremiumOnlyText(), MAIN_KEYBOARD);
+    return;
+  }
+
+  const dailyLimit = getUserDailyLimit(user);
+  const todayUsageCount = userService.getDailyUsageCount(user, 'text');
+  const remainingLimit = Math.max(0, dailyLimit - todayUsageCount);
+
+  if (remainingLimit < PLAN_GOAL_LIMIT_COST) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, buildPlanGoalLimitRequiredText(remainingLimit), MAIN_KEYBOARD);
+    return;
+  }
+
+  const income = parsePositiveAmount(text);
+
+  if (!income) {
+    await bot.sendMessage(chatId, "Daromadni faqat musbat raqam shaklida yozing. Masalan: 5000000", getPlanGoalCancelMarkup());
+    return;
+  }
+
+  setUserState(telegramId, 'awaiting_plan_goal_text', { planIncome: income });
+  await bot.sendMessage(chatId, buildPlanGoalIncomeSavedText(income), getPlanGoalCancelMarkup());
+}
+
+async function handlePlanGoalInput(bot, chatId, telegramId, user, stateData, text) {
   const planText = String(text || '').trim();
+  const planIncome = Number(stateData?.planIncome || 0);
 
   if (!user?.is_premium) {
     clearUserState(telegramId);
     await bot.sendMessage(chatId, buildPlanGoalPremiumOnlyText(), MAIN_KEYBOARD);
+    return;
+  }
+
+  if (!Number.isFinite(planIncome) || planIncome <= 0) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, "Reja tahlili sessiyasi eskirgan. Iltimos, '🎯 Reja va Maqsad' tugmasini qayta bosing.", MAIN_KEYBOARD);
     return;
   }
 
@@ -1030,14 +1087,11 @@ async function handlePlanGoalInput(bot, chatId, telegramId, user, text) {
 
   const dailyLimit = getUserDailyLimit(user);
   const todayUsageCount = userService.getDailyUsageCount(user, 'text');
+  const remainingLimit = Math.max(0, dailyLimit - todayUsageCount);
 
-  if (todayUsageCount >= dailyLimit) {
+  if (remainingLimit < PLAN_GOAL_LIMIT_COST) {
     clearUserState(telegramId);
-    await bot.sendMessage(
-      chatId,
-      `Bugungi premium limitingiz tugadi (${todayUsageCount}/${dailyLimit}). Ertaga yana foydalanishingiz mumkin.`,
-      MAIN_KEYBOARD
-    );
+    await bot.sendMessage(chatId, buildPlanGoalLimitRequiredText(remainingLimit), MAIN_KEYBOARD);
     return;
   }
 
@@ -1048,11 +1102,11 @@ async function handlePlanGoalInput(bot, chatId, telegramId, user, text) {
     const summary = await expenseService.getMonthlySummary(user.id, month);
     const analysis = await generatePlanGoalAnalysis({
       planText,
-      salary: Number(user.current_salary || 0),
+      salary: planIncome,
       totalSpent: Number(summary.totalSpent || 0)
     });
 
-    await userService.incrementDailyUsage(user, 1, 'text');
+    await userService.incrementDailyUsage(user, PLAN_GOAL_LIMIT_COST, 'text');
     clearUserState(telegramId);
     await bot.sendMessage(chatId, buildPlanGoalResultText(analysis), MAIN_KEYBOARD);
   } catch (error) {
@@ -1824,8 +1878,13 @@ async function handleMessage(bot, msg) {
       return;
     }
 
-    if (state?.type === 'awaiting_plan_goal') {
-      await handlePlanGoalInput(bot, chatId, telegramId, user, normalizedText);
+    if (state?.type === 'awaiting_plan_goal_income') {
+      await handlePlanGoalIncomeInput(bot, chatId, telegramId, user, normalizedText);
+      return;
+    }
+
+    if (state?.type === 'awaiting_plan_goal_text') {
+      await handlePlanGoalInput(bot, chatId, telegramId, user, state.data, normalizedText);
       return;
     }
 

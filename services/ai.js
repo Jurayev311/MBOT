@@ -522,14 +522,57 @@ function formatCategoryBreakdownList(items) {
     .join('; ');
 }
 
-function truncateAdviceText(text, maxLength = 500) {
+function getLastSentenceEndIndex(text) {
+  return Math.max(
+    text.lastIndexOf('.'),
+    text.lastIndexOf('!'),
+    text.lastIndexOf('?')
+  );
+}
+
+function truncateAdviceText(text, maxLength = 500, options = {}) {
+  const { preferCompleteSentence = false } = options;
   const cleanText = String(text || '').replace(/\s+\n/g, '\n').trim();
 
-  if (cleanText.length <= maxLength) {
-    return cleanText;
+  if (!cleanText) {
+    return '';
   }
 
-  return `${cleanText.slice(0, maxLength - 3).trim()}...`;
+  const limit = Number.isFinite(Number(maxLength)) && Number(maxLength) > 0
+    ? Number(maxLength)
+    : 500;
+  const isOverLimit = cleanText.length > limit;
+  const safeText = isOverLimit
+    ? cleanText.slice(0, limit).trim()
+    : cleanText;
+
+  if (/[.!?]$/.test(safeText)) {
+    return safeText;
+  }
+
+  const lastSentenceEnd = getLastSentenceEndIndex(safeText);
+  const minSentenceEnd = preferCompleteSentence
+    ? 0
+    : Math.floor(limit * 0.25);
+
+  if (lastSentenceEnd > minSentenceEnd) {
+    return safeText.slice(0, lastSentenceEnd + 1).trim();
+  }
+
+  if (!isOverLimit && !preferCompleteSentence) {
+    return safeText;
+  }
+
+  const lastSpace = safeText.lastIndexOf(' ');
+  const minSpace = preferCompleteSentence
+    ? 0
+    : Math.floor(limit * 0.45);
+
+  if (lastSpace > minSpace) {
+    return `${safeText.slice(0, lastSpace).trim()}...`;
+  }
+
+  return `${safeText}...`;
 }
 
 function getTopCategory(byCategory = {}) {
@@ -678,19 +721,20 @@ function buildAnalysisPrompt(metrics) {
     `- Joriy sarflash sur'ati bo'yicha backend hisob-kitobi: ${metrics.projectionHint}`,
     '',
     'QATTIQ QOIDALAR:',
-    '1. Javob MAKSIMAL 4 ta qisqa jumla bo\'lsin. Uzun tushuntirish, umumiy gaplar ("moliyaviy barqarorlik", "moliyaviy intizom" kabi), salomlashish, xayrlashish YOZMA.',
+    '1. Javob MAKSIMAL 450 belgi yoki 4 ta qisqa jumla bo\'lsin. Uzun tushuntirish, umumiy gaplar ("moliyaviy barqarorlik", "moliyaviy intizom" kabi), salomlashish, xayrlashish YOZMA.',
     '2. Faqat MOSLASHUVCHAN xarajatlar orasidan maslahat ber. Majburiy xarajatlarni (Kommunal, Sog\'liq) hech qachon "kamaytiring" deb aytma - agar shular eng katta bo\'lsa, buni aytib, moslashuvchan qismdan boshqa maslahat top. Agar moslashuvchan xarajat umuman yo\'q bo\'lsa, faqat "Moslashuvchan xarajat yo\'q, kamaytiradigan alohida joy ko\'rinmayapti" mazmunida yoz.',
     '3. Agar "Tavsiya uchun yagona moslashuvchan asos" berilgan bo\'lsa, faqat o\'sha kategoriya, foiz va tejash summasidan foydalan; boshqa foiz, kunlik limit, kunlik budjet yoki yangi raqam o\'ylab topma.',
     '4. Real vaziyatni baholab, joriy sarflash sur\'ati asosida oy oxirida taxminan qancha balans (musbat yoki manfiy) qolishini hisoblab ayt - lekin bu son maoshning 2 barobaridan oshib ketmasin (agar formula noto\'g\'ri katta son chiqarsa, buning o\'rniga shunchaki "hozirgi sur\'atda oy oxirigacha yetarli" yoki "tejash kerak" deb sifat jihatidan ayt, aniq son bermang).',
     '5. Agar kamaytirish tavsiya qilsang, 1 qisqa jumlada nima uchun buni ehtiyot bilan qilish kerakligini ayt (masalan sifat yoki qulaylikka ta\'siri).',
     '6. "Kunlik limit", "kunlik budjet", "barobar oshdi" kabi iboralarni yozma. Ohang - do\'stona, lekin professional va to\'g\'ridan-to\'g\'ri. Ortiqcha emoji ishlatma (maksimal 2-3 ta).',
+    "7. Javobni albatta tugallangan gap bilan yakunla; yarim so'z yoki yarim jumla qoldirma.",
     '',
     "Faqat tahlil matnini yoz, boshqa hech narsa qo'shma."
   ].join('\n');
 }
 
 function buildGeminiAdviceResponse(metrics, rawAdviceText) {
-  const adviceText = truncateAdviceText(rawAdviceText);
+  const adviceText = truncateAdviceText(rawAdviceText, 500, { preferCompleteSentence: true });
 
   return [
     `📊 Bu oy ${formatPercent(metrics.spentPercent)}% sarflandi. Qolgan balans: ${formatMoney(metrics.remainingBalance)}.`,
@@ -860,7 +904,7 @@ async function generateAdvice(userData) {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 220
+        maxOutputTokens: 450
       }
     }));
 
@@ -888,16 +932,17 @@ function buildPlanGoalPrompt({ planText, salary, totalSpent }) {
     String(planText || '').trim(),
     '',
     "Foydalanuvchining joriy holati (kontekst uchun, taqqoslash uchun):",
-    `Oylik maosh: ${formatMoney(salary)}`,
+    `Keyingi oy kutilayotgan daromad: ${formatMoney(salary)}`,
     `Shu oy haqiqiy xarajati: ${formatMoney(totalSpent)}`,
     '',
     'Vazifang:',
     '1. Yozilgan reja xarajatlarini jamla, umumiy summani hisobla.',
     '2. Agar reja jami maoshdan oshib ketsa, buni aniq ayt va qancha oshib ketganini hisobla.',
     '3. Agar rejada "maqsad" (masalan biror narsa sotib olish) aytilgan bo\'lsa, bu narsani hozir sotib olish (naqd yoki bo\'lib to\'lash) maqbul yoki maqbul emasligini hisobla va ayt.',
-    "4. Agar bo'lib to'lash summasi berilgan bo'lsa, bu summa reja bilan birga qo'shilganda byudjetga qanday ta'sir qilishini hisobla.",
+    "4. Agar bo'lib to'lash summasi berilgan bo'lsa, byudjetga bir martalik umumiy narx emas, oylik to'lov ta'sir qilishini hisobga ol.",
+    "5. Agar foydalanuvchi 'oyiga X dan', 'har oy X', 'X dan', 'bo'lib to'lash' desa, buni umumiy narx va oylik to'lov sifatida alohida ajrat. Masalan: 'telefon 3mln oyiga 345000 dan' => umumiy narx 3 000 000 so'm, oyiga to'lov 345 000 so'm; byudjet hisobida 345 000 so'mni qo'sh, 3 000 000 so'mni alohida maqsad narxi sifatida eslat.",
     '',
-    'QISQA (maksimal 5-6 jumla), aniq va amaliy javob yoz. Raqamlarga asoslan, umumiy gaplar yozma.'
+    "QISQA yoz: maksimal 400 belgi yoki 5 ta qisqa jumla. Raqamlangan ro'yxat ishlatma. Javobni albatta to'liq gap bilan tugat, yarim so'z yoki tugallanmagan jumla qoldirma. Raqamlarga asoslan, umumiy gaplar yozma."
   ].join('\n');
 }
 
@@ -911,7 +956,7 @@ async function generatePlanGoalAnalysis(planData) {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: 0.15,
-        maxOutputTokens: 260
+        maxOutputTokens: 700
       }
     }));
 
@@ -920,7 +965,7 @@ async function generatePlanGoalAnalysis(planData) {
     debugAi('generatePlanGoalAnalysis.rawResponse', rawText);
     debugAi('generatePlanGoalAnalysis.finishReason', result.response.candidates?.[0]?.finishReason);
 
-    return truncateAdviceText(rawText, 800);
+    return truncateAdviceText(rawText, 500, { preferCompleteSentence: true });
   } catch (error) {
     debugAi('generatePlanGoalAnalysis.requestError', {
       model: geminiModelName || getConfiguredModelName(),
