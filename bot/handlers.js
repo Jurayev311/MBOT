@@ -490,6 +490,36 @@ function isPlanGoalButtonText(text) {
     .includes('reja va maqsad');
 }
 
+function getMainKeyboardAction(text) {
+  const normalizedText = String(text || '').trim();
+
+  if (normalizedText === '📊 Hisobot') {
+    return 'report';
+  }
+
+  if (normalizedText === '💰 Maosh') {
+    return 'salary';
+  }
+
+  if (normalizedText === '🤖 AI Tahlil') {
+    return 'analysis';
+  }
+
+  if (normalizedText === '⚙️ Sozlamalar') {
+    return 'settings';
+  }
+
+  if (isPlanGoalButtonText(normalizedText)) {
+    return 'planGoal';
+  }
+
+  return null;
+}
+
+function isMainKeyboardButtonText(text) {
+  return Boolean(getMainKeyboardAction(text));
+}
+
 function formatReportExpenseNote(expense) {
   return String(expense?.note || '').trim() || expense?.category || 'Xarajat';
 }
@@ -1312,6 +1342,69 @@ async function handleSettings(bot, chatId, user) {
   );
 }
 
+async function promptForMissingName(bot, chatId, telegramId) {
+  setUserState(telegramId, 'awaiting_start_name');
+  await bot.sendMessage(chatId, "Iltimos, avval ismingizni kiriting.", MAIN_KEYBOARD);
+}
+
+async function promptForMissingSalary(bot, chatId, telegramId) {
+  setUserState(telegramId, 'awaiting_salary');
+  await bot.sendMessage(chatId, "Iltimos, avval maoshingizni kiriting. Masalan: 5000000", MAIN_KEYBOARD);
+}
+
+async function handleMainKeyboardButton(bot, chatId, telegramId, user, text) {
+  const action = getMainKeyboardAction(text);
+
+  if (!action) {
+    return false;
+  }
+
+  if (!hasFullName(user)) {
+    await promptForMissingName(bot, chatId, telegramId);
+    return true;
+  }
+
+  if (action === 'salary') {
+    const hasSalary = Number(user.current_salary || 0) > 0;
+    setUserState(telegramId, hasSalary ? 'awaiting_new_salary' : 'awaiting_salary');
+    await bot.sendMessage(
+      chatId,
+      hasSalary
+        ? `Hozirgi maosh: ${formatMoney(user.current_salary)}. Yangi summani kiriting.`
+        : "Maoshingizni kiriting. Masalan: 5000000",
+      MAIN_KEYBOARD
+    );
+    return true;
+  }
+
+  if (Number(user.current_salary || 0) <= 0) {
+    await promptForMissingSalary(bot, chatId, telegramId);
+    return true;
+  }
+
+  if (action === 'report') {
+    await handleReport(bot, chatId, user);
+    return true;
+  }
+
+  if (action === 'analysis') {
+    await handleAnalysis(bot, chatId, user);
+    return true;
+  }
+
+  if (action === 'settings') {
+    await handleSettings(bot, chatId, user);
+    return true;
+  }
+
+  if (action === 'planGoal') {
+    await handlePlanGoalStart(bot, chatId, telegramId, user);
+    return true;
+  }
+
+  return false;
+}
+
 async function handleStatsCommand(bot, msg) {
   if (!isAdminUser(msg.from)) {
     return;
@@ -2029,6 +2122,12 @@ async function handleMessage(bot, msg) {
     const state = getUserState(telegramId);
     const normalizedText = text.trim();
 
+    if (state && isMainKeyboardButtonText(normalizedText)) {
+      clearUserState(telegramId);
+      await handleMainKeyboardButton(bot, chatId, telegramId, user, normalizedText);
+      return;
+    }
+
     if (state?.type === 'awaiting_start_name') {
       if (!normalizedText) {
         await bot.sendMessage(chatId, buildNamePromptText(), MAIN_KEYBOARD);
@@ -2074,29 +2173,7 @@ async function handleMessage(bot, msg) {
       return;
     }
 
-    if (normalizedText === '📊 Hisobot') {
-      await handleReport(bot, chatId, user);
-      return;
-    }
-
-    if (normalizedText === '🤖 AI Tahlil') {
-      await handleAnalysis(bot, chatId, user);
-      return;
-    }
-
-    if (normalizedText === '💰 Maosh') {
-      setUserState(telegramId, 'awaiting_new_salary');
-      await bot.sendMessage(chatId, `Hozirgi maosh: ${formatMoney(user.current_salary)}. Yangi summani kiriting.`, MAIN_KEYBOARD);
-      return;
-    }
-
-    if (normalizedText === '⚙️ Sozlamalar') {
-      await handleSettings(bot, chatId, user);
-      return;
-    }
-
-    if (isPlanGoalButtonText(normalizedText)) {
-      await handlePlanGoalStart(bot, chatId, telegramId, user);
+    if (await handleMainKeyboardButton(bot, chatId, telegramId, user, normalizedText)) {
       return;
     }
 
