@@ -52,7 +52,11 @@ const PAYMENT_START_CALLBACK = 'payment_send_receipt';
 const PAYMENT_CONFIRM_PREFIX = 'payment_confirm_';
 const PAYMENT_REJECT_PREFIX = 'payment_reject_';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_COUNT = Number(process.env.RATE_LIMIT_PER_MINUTE || 20);
+const DEFAULT_RATE_LIMIT_COUNT = 20;
+const configuredRateLimitCount = Number(process.env.RATE_LIMIT_PER_MINUTE);
+const RATE_LIMIT_COUNT = Number.isInteger(configuredRateLimitCount) && configuredRateLimitCount > 0
+  ? configuredRateLimitCount
+  : DEFAULT_RATE_LIMIT_COUNT;
 const FREE_DAILY_LIMIT = 15;
 const PREMIUM_DAILY_LIMIT = 50;
 const FREE_DAILY_VOICE_LIMIT = 2;
@@ -1891,6 +1895,11 @@ async function handleCallback(bot, query) {
   try {
     if (!chatId) {
       await answerCallback(bot, query);
+      return;
+    }
+
+    if (isRateLimited(telegramId)) {
+      await answerCallback(bot, query, `Bir daqiqada ${RATE_LIMIT_COUNT} tadan ortiq amal qilmang.`);
       return;
     }
 
