@@ -39,10 +39,17 @@ const GEMINI_RETRY_DELAY_MS = 2000;
 const SIGNED_AMOUNT_PATTERN = /\+?\b\d{1,3}(?:[ .]\d{3})+(?:[,.]\d+)?\b|\+?\b\d+(?:[,.]\d+)?\b/;
 const INCOME_KEYWORDS = [
   'qarzimni qaytardi',
+  'qarzim qaytdi',
   'qarzini qaytardi',
   'qarz qaytdi',
   'qarz qaytardi',
   'qarz qaytarildi',
+  "qarzimni to'ladi",
+  'qarzimni toladi',
+  "qarz to'landi",
+  'qarz tolandi',
+  "qarzini to'ladi",
+  'qarzini toladi',
   'pul keldi',
   "sovg'a berdi",
   'sovga berdi',

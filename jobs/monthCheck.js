@@ -32,6 +32,13 @@ async function notifyPremiumExpired(bot, telegramId) {
   );
 }
 
+async function notifyDailyReminder(bot, telegramId) {
+  await bot.sendMessage(
+    telegramId,
+    "👋 Bugun hech narsa yozmadingiz. Xarajat bo'lgan bo'lsa, unutmang!"
+  );
+}
+
 async function rolloverUserMonth(bot, user) {
   const currentMonth = userService.getMonthKey();
 
@@ -91,6 +98,30 @@ async function runMonthCheck(bot) {
   }
 }
 
+async function runDailyReminder(bot, date = new Date()) {
+  if (!bot) {
+    return;
+  }
+
+  const users = await userService.getAllUsers();
+
+  for (const user of users) {
+    try {
+      if (!user.telegram_id || Number(user.current_salary || 0) <= 0) {
+        continue;
+      }
+
+      const todayCount = await expenseService.getDailyTransactionCount(user.id, date);
+
+      if (todayCount === 0) {
+        await notifyDailyReminder(bot, user.telegram_id);
+      }
+    } catch (error) {
+      console.error(`Kunlik eslatmada xato: user=${user.id}`, error);
+    }
+  }
+}
+
 function startMonthCheck(bot) {
   const timezone = process.env.BOT_TIMEZONE || 'Asia/Tashkent';
 
@@ -98,6 +129,12 @@ function startMonthCheck(bot) {
   cron.schedule('0 9 * * *', () => {
     runMonthCheck(bot).catch((error) => {
       console.error('Cron oy tekshiruvida xato:', error);
+    });
+  }, { timezone });
+
+  cron.schedule('0 21 * * *', () => {
+    runDailyReminder(bot).catch((error) => {
+      console.error('Cron kunlik eslatmada xato:', error);
     });
   }, { timezone });
 
@@ -110,8 +147,10 @@ function startMonthCheck(bot) {
 
 module.exports = {
   expirePremiumIfNeeded,
+  notifyDailyReminder,
   notifyNewMonth,
   notifyPremiumExpired,
+  runDailyReminder,
   rolloverUserMonth,
   runMonthCheck,
   startMonthCheck

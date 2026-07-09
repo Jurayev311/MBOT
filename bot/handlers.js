@@ -1,3 +1,5 @@
+const ExcelJS = require('exceljs');
+
 const { categorizeExpense, categorizeVoiceExpense, generateAdvice, generatePlanGoalAnalysis } = require('../services/ai');
 const apiUsageService = require('../services/apiUsageService');
 const expenseService = require('../services/expenseService');
@@ -16,14 +18,7 @@ const MAIN_KEYBOARD = {
   }
 };
 
-const SETTINGS_INLINE_KEYBOARD = {
-  reply_markup: {
-    inline_keyboard: [
-      [{ text: "✏️ Ismni o'zgartirish", callback_data: 'settings_change_name' }],
-      [{ text: "🗑️ Ma'lumotlarni tozalash", callback_data: 'settings_clear_request' }]
-    ]
-  }
-};
+const SETTINGS_EXPORT_EXCEL_CALLBACK = 'settings_export_excel';
 
 const CLEAR_CONFIRM_INLINE_KEYBOARD = {
   reply_markup: {
@@ -35,6 +30,23 @@ const CLEAR_CONFIRM_INLINE_KEYBOARD = {
     ]
   }
 };
+
+function getSettingsInlineKeyboard(user) {
+  const inlineKeyboard = [
+    [{ text: "✏️ Ismni o'zgartirish", callback_data: 'settings_change_name' }],
+    [{ text: "🗑️ Ma'lumotlarni tozalash", callback_data: 'settings_clear_request' }]
+  ];
+
+  if (user?.is_premium) {
+    inlineKeyboard.push([{ text: '📥 Excel hisobot', callback_data: SETTINGS_EXPORT_EXCEL_CALLBACK }]);
+  }
+
+  return {
+    reply_markup: {
+      inline_keyboard: inlineKeyboard
+    }
+  };
+}
 
 const PAYMENT_START_CALLBACK = 'payment_send_receipt';
 const PAYMENT_CONFIRM_PREFIX = 'payment_confirm_';
@@ -478,6 +490,24 @@ function isPlanGoalButtonText(text) {
     .includes('reja va maqsad');
 }
 
+function formatReportExpenseNote(expense) {
+  return String(expense?.note || '').trim() || expense?.category || 'Xarajat';
+}
+
+function getTopExpenseLines(expenses = []) {
+  const expenseItems = expenses
+    .filter((expense) => expense?.type !== 'income')
+    .sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
+
+  if (expenseItems.length < 3) {
+    return [];
+  }
+
+  return expenseItems
+    .slice(0, 3)
+    .map((expense, index) => `${index + 1}. ${formatReportExpenseNote(expense)} — ${formatMoney(expense.amount)}`);
+}
+
 function formatReport(user, summary) {
   const salary = Number(user.current_salary || 0);
   const totalSpent = Number(summary.totalSpent || 0);
@@ -488,6 +518,10 @@ function formatReport(user, summary) {
     .map(([category, amount]) => `- ${category}: ${formatMoney(amount)}`);
 
   const percent = salary > 0 ? Math.round((totalSpent / salary) * 100) : 0;
+  const topExpenseLines = getTopExpenseLines(summary.expenses);
+  const topExpensesBlock = topExpenseLines.length
+    ? ['', '🔝 Eng katta xarajatlar:', topExpenseLines.join('\n')]
+    : [];
 
   return [
     `📊 ${summary.month} hisobot`,
@@ -498,7 +532,8 @@ function formatReport(user, summary) {
     `Qolgan balans: ${formatMoney(balance)}`,
     '',
     'Kategoriyalar:',
-    categoryLines.length ? categoryLines.join('\n') : "- Hali xarajat yo'q"
+    categoryLines.length ? categoryLines.join('\n') : "- Hali xarajat yo'q",
+    ...topExpensesBlock
   ].join('\n');
 }
 
@@ -506,19 +541,12 @@ function buildSalarySavedText(salary) {
   return [
     `Maosh saqlandi: ${formatMoney(salary)} ✅`,
     '',
-    'Endi xarajatlaringizni istalgan vaqtda oddiy matn bilan yozib boraverishingiz mumkin. Masalan: 25000 nonga',
+    'Xarajat yoki kirimni oddiy matn bilan yozing:',
+    '📝 "25000 nonga" — xarajat',
+    '📝 "50000 qarzim qaytdi" — kirim',
     '',
-    '🆓 Bepul tarif:',
-    '   📝 Matn orqali: kuniga 15 ta xarajat',
-    '   🎤 Ovozli xabar: kuniga 2 ta',
-    '',
-    '💎 Premium tarif:',
-    '   📝 Matn orqali: kuniga 50 ta xarajat',
-    '   🎤 Ovozli xabar: kuniga 10 ta',
-    '',
-    "Bepul limitingiz tugagach, premium tarifga o'tish taklif qilinadi.",
-    '',
-    buildPremiumShortcutText()
+    '🆓 Bepul: 15 xarajat, 2 ovozli/kun',
+    '💎 Premium: 50 xarajat, 10 ovozli/kun — /premium_narxi'
   ].join('\n');
 }
 
@@ -532,36 +560,29 @@ function buildSalaryPromptText(name) {
 
 function buildStartWelcomeText(user) {
   return [
-    `Xush kelibsiz, ${getDisplayName(user)}! Xarajatingizni yozing yoki pastdagi tugmalardan foydalaning.`,
+    `Xush kelibsiz, ${getDisplayName(user)}! Xarajat yoki kirimni yozing.`,
     '',
-    "Istasangiz, limitingiz tugashini kutmasdan, istalgan vaqtda /premium_narxi buyrug'i orqali premium tarifga o'tishingiz mumkin."
+    'Hisobot, maosh va tahlil uchun pastdagi tugmalardan foydalaning.'
   ].join('\n');
-}
-
-function buildPremiumShortcutText() {
-  return "Istasangiz, limitingiz tugashini kutmasdan, istalgan vaqtda /premium_narxi buyrug'i orqali premium tarifga o'tishingiz mumkin.";
 }
 
 function buildPremiumPriceText() {
   return [
-    '💎 Premium tarif',
+    `💎 Premium — ${formatPaymentPrice()} so'm/oy`,
     '',
-    '📝 Matn orqali: kuniga 50 ta xarajat',
-    '🎤 Ovozli xabar: kuniga 10 ta',
-    '🎯 Reja va Maqsad tahlili (yangi!)',
+    '📝 50 ta matn/kun',
+    '🎤 10 ta ovozli/kun',
+    '🎯 Reja va Maqsad tahlili',
     '',
     `💳 Karta: ${getPaymentCardNumber()}`,
-    `💰 Narxi: ${formatPaymentPrice()} so'm/oy`,
-    '',
-    "To'lov qilgach, pastdagi tugmani bosib, chek rasmini yuboring."
+    "To'lovdan keyin pastdagi tugma orqali chek yuboring."
   ].join('\n');
 }
 
 function buildPlanGoalPremiumOnlyText() {
   return [
-    '🎯 Bu funksiya faqat premium foydalanuvchilar uchun mavjud.',
-    '',
-    "Premium tarifga o'tish uchun: /premium_narxi"
+    '🎯 Reja va Maqsad faqat premiumda.',
+    'Premium: /premium_narxi'
   ].join('\n');
 }
 
@@ -569,11 +590,9 @@ function buildPlanGoalIntroText() {
   return [
     '🎯 Reja va Maqsad',
     '',
-    "Keyingi oy uchun xarajat rejangizni va maqsadingizni yozing — AI sizga tahlil beradi.",
-    '',
     "⚠️ Bu ma'lumot saqlanmaydi va limitdan 15 ta hisoblanadi.",
     '',
-    "Avval, keyingi oy uchun kutilayotgan daromadingizni kiriting (so'mda):"
+    "Avval keyingi oy daromadini yozing (so'mda)."
   ].join('\n');
 }
 
@@ -581,15 +600,15 @@ function buildPlanGoalIncomeSavedText(income) {
   return [
     `✅ Daromad: ${formatMoney(income)}`,
     '',
-    "Endi xarajat rejangizni va maqsadingizni yozing. Misol:",
+    'Endi reja va maqsadingizni yozing. Misol:',
     "'Oziq-ovqat 800000, Uy-joy 1200000. Telefon 2.5mln, 3 oyga 836000 dan bo'lib to'lash mumkinmi?'"
   ].join('\n');
 }
 
 function buildPlanGoalLimitRequiredText(remainingLimit) {
   return [
-    `Bu funksiya uchun ${PLAN_GOAL_LIMIT_COST} ta limit kerak, lekin sizda bugun faqat ${remainingLimit} ta qoldi.`,
-    "Ertaga qayta urinib ko'ring."
+    `🎯 Reja tahlili uchun ${PLAN_GOAL_LIMIT_COST} ta limit kerak.`,
+    `Bugun qolgan: ${remainingLimit}. Ertaga qayta urinib ko'ring.`
   ].join('\n');
 }
 
@@ -599,42 +618,36 @@ function buildPlanGoalResultText(analysisText) {
     '',
     String(analysisText || '').trim(),
     '',
-    "⚠️ Eslatma: bu ma'lumotlar saqlanmadi. Qaytadan tahlil qilish uchun '🎯 Reja va Maqsad' tugmasini yana bosishingiz kerak bo'ladi."
+    "⚠️ Bu ma'lumot saqlanmadi."
   ].join('\n');
 }
 
 function buildLimitReachedText(dailyLimit) {
   return [
-    `Bugungi bepul limitingiz tugadi (${dailyLimit} ta). Ko'proq xarajat kiritish uchun premium sotib oling:`,
+    `Bugungi bepul limit tugadi (${dailyLimit} ta).`,
+    `💎 Premium: ${formatPaymentPrice()} so'm/oy`,
+    '📝 50 ta matn/kun, 🎤 10 ta ovozli/kun',
     '',
     `💳 Karta: ${getPaymentCardNumber()}`,
-    `💰 Narxi: ${formatPaymentPrice()} so'm/oy`,
-    '',
-    "To'lov qilgach, pastdagi tugmani bosib, chek rasmini yuboring.",
-    '',
-    buildPremiumShortcutText()
+    "To'lovdan keyin pastdagi tugma orqali chek yuboring."
   ].join('\n');
 }
 
 function buildFreeVoiceLimitReachedText(usedCount, dailyVoiceLimit) {
   return [
-    `🎤 Bugungi bepul ovozli xabar limitingiz tugadi (${usedCount}/${dailyVoiceLimit} ta).`,
+    `🎤 Bugungi ovozli limit tugadi (${usedCount}/${dailyVoiceLimit}).`,
+    `💎 Premium: ${formatPaymentPrice()} so'm/oy`,
+    '🎤 10 ta ovozli/kun',
     '',
-    "Ko'proq ovozli xabar yuborish uchun premium sotib oling:",
     `💳 Karta: ${getPaymentCardNumber()}`,
-    `💰 Narxi: ${formatPaymentPrice()} so'm/oy`,
-    '',
-    'Yoki xarajatni matn bilan yozing (masalan: 25000 nonga).',
-    '',
-    buildPremiumShortcutText()
+    "Yoki matn bilan yozing: 25000 nonga."
   ].join('\n');
 }
 
 function buildPremiumVoiceLimitReachedText(usedCount, dailyVoiceLimit) {
   return [
-    `🎤 Bugungi ovozli xabar limitingiz tugadi (${usedCount}/${dailyVoiceLimit} ta).`,
-    '',
-    'Ertaga yana foydalanishingiz mumkin. Hozircha xarajatni matn bilan yozing (masalan: 25000 nonga).'
+    `🎤 Bugungi ovozli limit tugadi (${usedCount}/${dailyVoiceLimit}).`,
+    'Ertaga yana foydalanishingiz mumkin. Hozircha matn bilan yozing.'
   ].join('\n');
 }
 
@@ -648,7 +661,7 @@ function buildSettingsText(user, todayExpenseCount) {
       '💎 Status: Premium',
       `📅 Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`,
       `⏳ Qolgan kunlar: ${formatRemainingDays(user.premium_expires_at)}`,
-      `📊 Bugungi limit: ${todayExpenseCount}/${dailyLimit} ta xarajat`,
+      `📊 Bugun: ${todayExpenseCount}/${dailyLimit}`,
       '',
       'Kerakli amalni tanlang:'
     ].join('\n');
@@ -658,7 +671,7 @@ function buildSettingsText(user, todayExpenseCount) {
     '⚙️ Sozlamalar',
     '',
     '🆓 Status: Bepul',
-    `📊 Bugungi limit: ${todayExpenseCount}/${dailyLimit} ta xarajat`,
+    `📊 Bugun: ${todayExpenseCount}/${dailyLimit}`,
     '',
     'Kerakli amalni tanlang:'
   ].join('\n');
@@ -824,7 +837,7 @@ function buildAdminUserDetailsMarkup(user, page) {
 function buildAdminDeleteConfirmText(user) {
   return [
     `⚠️ Rostdan ham ${formatStatsUserName(user)} ni butunlay o'chirmoqchimisiz?`,
-    "Uning barcha ma'lumotlari (xarajatlar, tarix, profil) butunlay o'chadi va qaytarib bo'lmaydi."
+    "Uning barcha ma'lumotlari (yozuvlar, tarix, profil) o'chadi va qaytarib bo'lmaydi."
   ].join('\n');
 }
 
@@ -866,14 +879,32 @@ function formatTransactionAmount(transaction) {
   return `${prefix}${formatMoney(transaction?.amount)}`;
 }
 
+function isUnusualExpense(expense, previousExpenses = []) {
+  if (isIncomeTransaction(expense) || previousExpenses.length < 3) {
+    return false;
+  }
+
+  const total = previousExpenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const average = total / previousExpenses.length;
+
+  return average > 0 && Number(expense.amount || 0) >= average * 3;
+}
+
+function getExpenseItems(expenses = []) {
+  return expenses.filter((expense) => expense?.type !== 'income');
+}
+
 function buildSkippedExpensesText(skippedCount) {
   return skippedCount > 0
     ? `Limit tugagani sababli ${skippedCount} ta operatsiya saqlanmadi.`
     : null;
 }
 
-function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
+function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0, options = {}) {
   const skippedText = buildSkippedExpensesText(skippedCount);
+  const unusualWarning = options.hasUnusualExpense && savedExpenses.some((expense) => !isIncomeTransaction(expense))
+    ? "⚠️ Bu odatdagidan ancha katta xarajat, diqqat bilan kuzating."
+    : null;
 
   if (savedExpenses.length === 1) {
     const savedExpense = savedExpenses[0];
@@ -883,6 +914,8 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
         `✅ Kirim qo'shildi: +${formatMoney(savedExpense.amount)}`,
         `Izoh: ${savedExpense.note || 'Kirim'}`,
         `Yangi balans: ${formatMoney(balance)}`,
+        unusualWarning ? '' : null,
+        unusualWarning,
         skippedText ? '' : null,
         skippedText
       ].filter((line) => line !== null).join('\n');
@@ -892,6 +925,8 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
       `✅ Saqlandi: ${formatMoney(savedExpense.amount)}`,
       `Kategoriya: ${savedExpense.category}`,
       `Qolgan balans: ${formatMoney(balance)}`,
+      unusualWarning ? '' : null,
+      unusualWarning,
       skippedText ? '' : null,
       skippedText
     ].filter((line) => line !== null).join('\n');
@@ -922,6 +957,8 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
     hasExpense ? `Jami xarajat: ${formatMoney(totalExpense)}` : null,
     hasIncome ? `Qo'shimcha kirim: ${formatMoney(totalIncome)}` : null,
     hasIncome ? `Yangi balans: ${formatMoney(balance)}` : `Qolgan balans: ${formatMoney(balance)}`,
+    unusualWarning ? '' : null,
+    unusualWarning,
     skippedText ? '' : null,
     skippedText
   ].filter((line) => line !== null).join('\n');
@@ -932,6 +969,85 @@ async function getCurrentBalance(user, month = user?.current_month || userServic
   return Number(user.current_salary || 0)
     - Number(summary.totalSpent || 0)
     + Number(summary.totalIncome || 0);
+}
+
+function formatExcelDate(dateInput) {
+  if (!dateInput) {
+    return '';
+  }
+
+  const date = new Date(dateInput);
+
+  if (!Number.isFinite(date.getTime())) {
+    return '';
+  }
+
+  return new Intl.DateTimeFormat('uz-UZ', {
+    timeZone: process.env.BOT_TIMEZONE || 'Asia/Tashkent',
+    dateStyle: 'short',
+    timeStyle: 'short'
+  }).format(date);
+}
+
+function getExcelReportFileName(month) {
+  const safeMonth = String(month || userService.getMonthKey()).replace(/[^\w-]/g, '_');
+  return `hisobot_${safeMonth}.xlsx`;
+}
+
+async function buildExcelReportBuffer(summary) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'MBot';
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet('Hisobot');
+  worksheet.columns = [
+    { header: 'Sana', key: 'date', width: 18 },
+    { header: 'Turi', key: 'type', width: 10 },
+    { header: 'Summa', key: 'amount', width: 14 },
+    { header: 'Kategoriya', key: 'category', width: 20 },
+    { header: 'Izoh', key: 'note', width: 32 }
+  ];
+
+  worksheet.getRow(1).font = { bold: true };
+
+  const rows = [...(summary.expenses || [])]
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+  for (const expense of rows) {
+    worksheet.addRow({
+      date: formatExcelDate(expense.created_at),
+      type: isIncomeTransaction(expense) ? 'Kirim' : 'Chiqim',
+      amount: Number(expense.amount || 0),
+      category: expense.category || '',
+      note: expense.note || ''
+    });
+  }
+
+  worksheet.getColumn('amount').numFmt = '#,##0';
+
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+async function sendExcelReport(bot, chatId, user) {
+  if (!user?.is_premium) {
+    await bot.sendMessage(chatId, 'Bu funksiya faqat premium uchun. /premium_narxi', MAIN_KEYBOARD);
+    return;
+  }
+
+  const month = user.current_month || userService.getMonthKey();
+  const summary = await expenseService.getMonthlySummary(user.id, month);
+  const fileName = getExcelReportFileName(month);
+  const buffer = await buildExcelReportBuffer(summary);
+
+  await bot.sendDocument(
+    chatId,
+    buffer,
+    { caption: `📥 ${month} hisobot` },
+    {
+      filename: fileName,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    }
+  );
 }
 
 async function sendLongMessage(bot, chatId, text) {
@@ -1192,7 +1308,7 @@ async function handleSettings(bot, chatId, user) {
   await bot.sendMessage(
     chatId,
     buildSettingsText(user, todayExpenseCount),
-    SETTINGS_INLINE_KEYBOARD
+    getSettingsInlineKeyboard(user)
   );
 }
 
@@ -1258,11 +1374,22 @@ async function handleExpenseText(bot, chatId, user, text) {
     }
 
     const month = user.current_month || userService.getMonthKey();
+    const summaryBeforeSave = await expenseService.getMonthlySummary(user.id, month);
+    const previousExpenses = getExpenseItems(summaryBeforeSave.expenses);
     const savedExpenses = [];
+    let hasUnusualExpense = false;
 
     for (const expense of expensesToSave) {
+      if (isUnusualExpense(expense, previousExpenses)) {
+        hasUnusualExpense = true;
+      }
+
       const savedExpense = await expenseService.createExpense(user.id, expense, month);
       savedExpenses.push(savedExpense);
+
+      if (!isIncomeTransaction(savedExpense)) {
+        previousExpenses.push(savedExpense);
+      }
     }
 
     await userService.incrementDailyUsage(user, savedExpenses.length, 'text');
@@ -1278,7 +1405,7 @@ async function handleExpenseText(bot, chatId, user, text) {
 
     await bot.sendMessage(
       chatId,
-      buildSavedExpensesText(savedExpenses, balance, skippedCount),
+      buildSavedExpensesText(savedExpenses, balance, skippedCount, { hasUnusualExpense }),
       messageOptions
     );
   } catch (error) {
@@ -1354,6 +1481,9 @@ async function handleVoice(bot, msg) {
     const fileUrl = await bot.getFileLink(voice.file_id);
     const parsedExpense = await categorizeVoiceExpense(fileUrl, voice.mime_type || 'audio/ogg');
     const month = user.current_month || userService.getMonthKey();
+    const summaryBeforeSave = await expenseService.getMonthlySummary(user.id, month);
+    const previousExpenses = getExpenseItems(summaryBeforeSave.expenses);
+    const hasUnusualExpense = isUnusualExpense(parsedExpense, previousExpenses);
     const savedExpense = await expenseService.createExpense(user.id, parsedExpense, month, 'voice');
     await userService.incrementDailyUsage(user, 1, 'voice');
     const summary = await expenseService.getMonthlySummary(user.id, month);
@@ -1363,7 +1493,7 @@ async function handleVoice(bot, msg) {
 
     await bot.sendMessage(
       chatId,
-      buildSavedExpensesText([savedExpense], balance),
+      buildSavedExpensesText([savedExpense], balance, 0, { hasUnusualExpense }),
       getExpenseActionMarkup(savedExpense, user.telegram_id)
     );
   } catch (error) {
@@ -1408,7 +1538,7 @@ async function handlePaymentReviewCallback(bot, query, review) {
     await userService.updatePremiumByTelegramId(review.telegramId, true);
     await bot.sendMessage(
       review.telegramId,
-      "✅ To'lovingiz tasdiqlandi! Premium tarif faollashtirildi, endi kuniga 50 ta matnli va 10 ta ovozli xarajat kirita olasiz.",
+      "✅ To'lov tasdiqlandi. Premium faollashdi: 50 ta matn, 10 ta ovozli/kun.",
       MAIN_KEYBOARD
     );
     await updateAdminPaymentMessage(bot, query, 'Tasdiqlandi ✅');
@@ -1443,7 +1573,7 @@ async function handlePremiumCommand(bot, msg, match, enabled) {
       try {
         await bot.sendMessage(
           targetTelegramId,
-          'Sizga premium tarif ochildi! Endi kuniga 50 ta matnli va 10 ta ovozli xarajat kirita olasiz',
+          'Premium ochildi: 50 ta matn, 10 ta ovozli/kun.',
           MAIN_KEYBOARD
         );
       } catch (notifyError) {
@@ -1723,6 +1853,11 @@ async function handleCallback(bot, query) {
       return;
     }
 
+    if (query.data === SETTINGS_EXPORT_EXCEL_CALLBACK) {
+      await sendExcelReport(bot, chatId, user);
+      return;
+    }
+
     if (query.data === 'settings_change_name') {
       await consumeCallbackMessage(bot, query, callbackKey);
       setUserState(telegramId, 'awaiting_name');
@@ -1735,7 +1870,7 @@ async function handleCallback(bot, query) {
       clearUserState(telegramId);
       await bot.sendMessage(
         chatId,
-        "Barcha xarajatlar, tarix va maosh ma'lumotlari o'chadi. Davom etasizmi?",
+        "Barcha yozuvlar, tarix va maosh ma'lumotlari o'chadi. Davom etasizmi?",
         CLEAR_CONFIRM_INLINE_KEYBOARD
       );
       return;
@@ -1994,7 +2129,7 @@ function registerHandlers(bot) {
   bot.onText(/^\/help$/, (msg) => {
     bot.sendMessage(
       msg.chat.id,
-      "Xarajatni oddiy yozing: 25000 nonga. Hisobot va tahlil uchun pastdagi tugmalardan foydalaning.",
+      "Xarajat yoki kirimni yozing: 25000 nonga, 50000 qarzim qaytdi. Hisobot va tahlil uchun tugmalardan foydalaning.",
       MAIN_KEYBOARD
     );
   });
