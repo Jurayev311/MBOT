@@ -2,7 +2,8 @@ const { supabase } = require('../config/db');
 const { CATEGORIES } = require('./ai');
 const { getMonthKey } = require('./userService');
 
-const EXPENSE_SELECT_COLUMNS = 'id, user_id, amount, category, note, month, input_type, created_at';
+const EXPENSE_SELECT_COLUMNS = 'id, user_id, amount, category, type, note, month, input_type, created_at';
+const INCOME_CATEGORY = 'Kirim';
 
 function sanitizeNote(note) {
   // Bazaga yoziladigan izohlar qisqa va bir qatorli saqlanadi.
@@ -12,14 +13,28 @@ function sanitizeNote(note) {
     .slice(0, 200);
 }
 
-function validateExpense({ amount, category, note }) {
+function normalizeTransactionType(type, category) {
+  const normalizedType = String(type || '').trim().toLowerCase();
+  const normalizedCategory = String(category || '').trim().toLowerCase();
+
+  if (normalizedType === 'income' || normalizedType === 'kirim' || normalizedCategory === 'kirim') {
+    return 'income';
+  }
+
+  return 'expense';
+}
+
+function validateExpense({ amount, category, note, type }) {
   const normalizedAmount = Number(amount);
 
   if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
-    throw new Error("Xarajat summasi musbat raqam bo'lishi kerak.");
+    throw new Error("Operatsiya summasi musbat raqam bo'lishi kerak.");
   }
 
-  const normalizedCategory = CATEGORIES.includes(category) ? category : 'Boshqa';
+  const normalizedType = normalizeTransactionType(type, category);
+  const normalizedCategory = normalizedType === 'income'
+    ? INCOME_CATEGORY
+    : CATEGORIES.includes(category) ? category : 'Boshqa';
   const normalizedNote = sanitizeNote(note);
 
   if (normalizedNote.length > 200) {
@@ -29,6 +44,7 @@ function validateExpense({ amount, category, note }) {
   return {
     amount: normalizedAmount,
     category: normalizedCategory,
+    type: normalizedType,
     note: normalizedNote
   };
 }
@@ -37,7 +53,7 @@ function assertPositiveAmount(amount) {
   const normalizedAmount = Number(amount);
 
   if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
-    throw new Error("Xarajat summasi musbat raqam bo'lishi kerak.");
+    throw new Error("Operatsiya summasi musbat raqam bo'lishi kerak.");
   }
 
   return normalizedAmount;
@@ -55,6 +71,7 @@ async function createExpense(userId, expense, month = getMonthKey(), inputType =
       user_id: userId,
       amount: payload.amount,
       category: payload.category,
+      type: payload.type,
       note: payload.note,
       month,
       input_type: normalizeInputType(inputType)
@@ -151,15 +168,25 @@ async function getMonthlySummary(userId, month = getMonthKey()) {
     return acc;
   }, {});
 
+  let totalIncome = 0;
   const totalSpent = expenses.reduce((sum, expense) => {
     const amount = Number(expense.amount || 0);
+
+    if (expense.type === 'income') {
+      totalIncome += amount;
+      return sum;
+    }
+
     byCategory[expense.category] = Number(byCategory[expense.category] || 0) + amount;
     return sum + amount;
   }, 0);
+  const netSpent = totalSpent - totalIncome;
 
   return {
     month,
     totalSpent,
+    totalIncome,
+    netSpent,
     byCategory,
     expenses
   };
@@ -197,7 +224,9 @@ async function getAdviceData(user) {
       month,
       salary,
       totalSpent: currentSummary.totalSpent,
-      balance: salary - currentSummary.totalSpent,
+      totalIncome: currentSummary.totalIncome,
+      netSpent: currentSummary.netSpent,
+      balance: salary - currentSummary.netSpent,
       byCategory: currentSummary.byCategory,
       expensesCount: currentSummary.expenses.length
     },

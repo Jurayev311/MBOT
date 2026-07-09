@@ -45,14 +45,14 @@ async function rolloverUserMonth(bot, user) {
 
   const previousSummary = await expenseService.getMonthlySummary(user.id, user.current_month);
   const salary = Number(user.current_salary || 0);
-  const totalSpent = Number(previousSummary.totalSpent || 0);
+  const netSpent = Number(previousSummary.netSpent || 0);
 
   await userService.saveMonthlyHistory({
     userId: user.id,
     month: user.current_month,
     salary,
-    totalSpent,
-    savings: salary - totalSpent
+    totalSpent: netSpent,
+    savings: salary - netSpent
   });
 
   const updatedUser = await userService.updateCurrentMonth(user.id, currentMonth);

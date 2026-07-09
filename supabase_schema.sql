@@ -120,14 +120,21 @@ create table if not exists public.expenses (
       'Bo''lib to''lash',
       'Oilaviy yordam',
       'Ko''ngilochar',
+      'Kirim',
       'Boshqa'
     )
   ),
+  type text not null default 'expense' check (type in ('expense', 'income')),
   note text,
   month text,
   input_type text not null default 'text' check (input_type in ('text', 'voice')),
   created_at timestamp with time zone default now()
 );
+
+alter table public.expenses add column if not exists type text default 'expense';
+update public.expenses set type = 'expense' where type is null;
+alter table public.expenses alter column type set default 'expense';
+alter table public.expenses alter column type set not null;
 
 alter table public.expenses add column if not exists input_type text default 'text';
 update public.expenses set input_type = 'text' where input_type is null;
@@ -151,9 +158,23 @@ alter table public.expenses
       'Bo''lib to''lash',
       'Oilaviy yordam',
       'Ko''ngilochar',
+      'Kirim',
       'Boshqa'
     )
   ) not valid;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'expenses_type_valid'
+      and conrelid = 'public.expenses'::regclass
+  ) then
+    alter table public.expenses
+      add constraint expenses_type_valid check (type in ('expense', 'income'));
+  end if;
+end $$;
 
 do $$
 begin

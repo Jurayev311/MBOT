@@ -17,6 +17,7 @@ const CATEGORIES = [
   "Ko'ngilochar",
   'Boshqa'
 ];
+const INCOME_CATEGORY = 'Kirim';
 
 const FIXED_CATEGORIES = ['Kommunal', "Sog'liq", 'Uy-joy', "Bo'lib to'lash"];
 const SIMPLE_FLEXIBLE_CATEGORIES = [
@@ -35,7 +36,24 @@ const AI_ANALYSIS_UNAVAILABLE_MESSAGE = "Hozir tahlil qila olmadim, birozdan key
 const PLAN_GOAL_UNAVAILABLE_MESSAGE = "Hozir reja tahlilini qila olmadim, birozdan keyin qayta urinib ko'ring.";
 const GEMINI_MIN_INTERVAL_MS = 300;
 const GEMINI_RETRY_DELAY_MS = 2000;
-const AMOUNT_PATTERN = /\b\d{1,3}(?:[ .]\d{3})+(?:[,.]\d+)?\b|\b\d+(?:[,.]\d+)?\b/;
+const SIGNED_AMOUNT_PATTERN = /\+?\b\d{1,3}(?:[ .]\d{3})+(?:[,.]\d+)?\b|\+?\b\d+(?:[,.]\d+)?\b/;
+const INCOME_KEYWORDS = [
+  'qarzimni qaytardi',
+  'qarzini qaytardi',
+  'qarz qaytdi',
+  'qarz qaytardi',
+  'qarz qaytarildi',
+  'pul keldi',
+  "sovg'a berdi",
+  'sovga berdi',
+  'topib oldim',
+  "qo'shimcha ish haqi",
+  'qoshimcha ish haqi',
+  "qo'shimcha daromad",
+  'qoshimcha daromad',
+  'kirim',
+  'daromad'
+];
 const CATEGORY_KEYWORDS = [
   {
     category: 'Uy-joy',
@@ -320,6 +338,46 @@ function normalizeCategory(value) {
   return exactMatch || CATEGORY_ALIASES[requested] || 'Boshqa';
 }
 
+function normalizeKeywordText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[‘’`]/g, "'")
+    .replace(/ʻ/g, "'")
+    .replace(/\s+/g, ' ');
+}
+
+function inferTransactionType(text, rawAmount = '') {
+  if (String(rawAmount || '').trim().startsWith('+')) {
+    return 'income';
+  }
+
+  const normalizedText = normalizeKeywordText(text);
+  const hasIncomeKeyword = INCOME_KEYWORDS.some((keyword) => (
+    normalizedText.includes(normalizeKeywordText(keyword))
+  ));
+
+  return hasIncomeKeyword ? 'income' : 'expense';
+}
+
+function normalizeTransactionType(value, context = '', category = '') {
+  const requested = normalizeKeywordText(value);
+
+  if (requested === 'income' || requested === 'kirim' || requested === 'daromad') {
+    return 'income';
+  }
+
+  if (requested === 'expense' || requested === 'chiqim' || requested === 'xarajat') {
+    return 'expense';
+  }
+
+  if (normalizeCategoryKey(category) === normalizeCategoryKey(INCOME_CATEGORY)) {
+    return 'income';
+  }
+
+  return inferTransactionType(context);
+}
+
 function normalizeExpensePayload(payload, fallbackNote) {
   const amount = toPositiveNumber(payload.amount);
 
@@ -327,9 +385,15 @@ function normalizeExpensePayload(payload, fallbackNote) {
     throw new Error("Gemini summa qiymatini to'g'ri ajratmadi.");
   }
 
+  const typeContext = payload.note
+    ? String(payload.note)
+    : String(fallbackNote || '');
+  const type = normalizeTransactionType(payload.type, typeContext, payload.category);
+
   return {
     amount,
-    category: normalizeCategory(payload.category),
+    type,
+    category: type === 'income' ? INCOME_CATEGORY : normalizeCategory(payload.category),
     note: compactInput(payload.note || fallbackNote, 200)
   };
 }
@@ -362,7 +426,7 @@ function inferCategory(text) {
 
 function parseExpenseLocally(text) {
   const cleanText = compactInput(text, 200);
-  const amountMatch = cleanText.match(AMOUNT_PATTERN);
+  const amountMatch = cleanText.match(SIGNED_AMOUNT_PATTERN);
 
   if (!amountMatch) {
     return null;
@@ -375,17 +439,19 @@ function parseExpenseLocally(text) {
   }
 
   const note = compactInput(cleanText.replace(amountMatch[0], '').trim() || cleanText, 200);
+  const type = inferTransactionType(cleanText, amountMatch[0]);
 
   return {
     amount,
-    category: inferCategory(cleanText),
+    type,
+    category: type === 'income' ? INCOME_CATEGORY : inferCategory(cleanText),
     note
   };
 }
 
 function parseExpensesLocally(text) {
   const cleanText = compactInput(text, 200);
-  const amountMatches = [...cleanText.matchAll(new RegExp(AMOUNT_PATTERN.source, 'g'))];
+  const amountMatches = [...cleanText.matchAll(new RegExp(SIGNED_AMOUNT_PATTERN.source, 'g'))];
 
   if (!amountMatches.length) {
     return null;
@@ -423,27 +489,47 @@ function parseExpensesLocally(text) {
 
   return amounts.map((match, index) => {
     const nextMatch = amounts[index + 1];
-    const segmentEnd = nextMatch ? nextMatch.index : cleanText.length;
-    const noteBeforeAmount = compactInput(
-      cleanText
-        .slice(0, match.index)
-        .replace(/^[\s+;,.-]+|[\s+;,.-]+$/g, ''),
-      80
+    const previousText = cleanText.slice(0, match.index);
+    const previousDelimiter = Math.max(
+      previousText.lastIndexOf(','),
+      previousText.lastIndexOf(';'),
+      previousText.lastIndexOf('\n')
     );
+    const amountEnd = match.index + match.raw.length;
+    const nextDelimiterCandidates = [',', ';', '\n']
+      .map((delimiter) => cleanText.indexOf(delimiter, amountEnd))
+      .filter((delimiterIndex) => delimiterIndex !== -1);
+    const nextDelimiter = nextDelimiterCandidates.length
+      ? Math.min(...nextDelimiterCandidates)
+      : -1;
+    const segmentStart = match.raw.startsWith('+')
+      ? match.index
+      : previousDelimiter === -1 ? 0 : previousDelimiter + 1;
+    const segmentEnd = [
+      nextMatch?.index,
+      nextDelimiter === -1 ? null : nextDelimiter,
+      cleanText.length
+    ]
+      .filter((value) => Number.isInteger(value))
+      .reduce((min, value) => Math.min(min, value), cleanText.length);
+    const segmentText = cleanText.slice(segmentStart, segmentEnd);
     const noteFromSegment = compactInput(
-      cleanText
-        .slice(match.index + match.raw.length, segmentEnd)
+      segmentText
+        .replace(match.raw, '')
         .replace(/^[\s+;,.-]*(?:va\s+)?/i, '')
         .replace(/[\s+;,.-]+$/g, ''),
       80
     );
     const note = canUseTailPartsForNotes
       ? tailParts[index]
-      : noteFromSegment || tailAfterLastAmount || noteBeforeAmount || cleanText;
+      : noteFromSegment || tailAfterLastAmount || cleanText;
+    const typeContext = `${match.raw} ${note} ${segmentText}`;
+    const type = inferTransactionType(typeContext, match.raw);
 
     return {
       amount: match.amount,
-      category: inferCategory(note),
+      type,
+      category: type === 'income' ? INCOME_CATEGORY : inferCategory(note),
       note
     };
   });
@@ -598,6 +684,10 @@ function buildAdviceMetrics(userData) {
   const current = userData?.currentMonth || {};
   const salary = Number(current.salary || 0);
   const totalSpent = Number(current.totalSpent || 0);
+  const totalIncome = Number(current.totalIncome || 0);
+  const netSpent = Number.isFinite(Number(current.netSpent))
+    ? Number(current.netSpent)
+    : totalSpent - totalIncome;
   const byCategory = current.byCategory || {};
   const categoryBreakdown = buildCategoryBreakdown(byCategory, totalSpent);
   const fixedBreakdown = categoryBreakdown.filter((item) => item.type === 'fixed');
@@ -610,10 +700,10 @@ function buildAdviceMetrics(userData) {
   const adviceSavings = adviceCategory.amount > 0
     ? Math.round(adviceCategory.amount * (adviceReductionPercent / 100))
     : 0;
-  const spentPercent = salary > 0 ? (totalSpent / salary) * 100 : 0;
-  const remainingBalance = salary - totalSpent;
+  const spentPercent = salary > 0 ? (netSpent / salary) * 100 : 0;
+  const remainingBalance = salary - netSpent;
   const monthTiming = getMonthTiming();
-  const dailyAverage = totalSpent / Math.max(1, monthTiming.dayOfMonth);
+  const dailyAverage = netSpent / Math.max(1, monthTiming.dayOfMonth);
   const projectedMonthlySpent = Math.round(dailyAverage * monthTiming.daysInMonth);
   const projectedMonthEndBalance = Math.round(salary - projectedMonthlySpent);
   const projectionLimit = salary > 0 ? salary * 2 : 0;
@@ -624,6 +714,8 @@ function buildAdviceMetrics(userData) {
     month: current.month,
     salary,
     totalSpent,
+    totalIncome,
+    netSpent,
     spentPercent: Math.round(spentPercent),
     remainingBalance: Math.round(remainingBalance),
     dayOfMonth: monthTiming.dayOfMonth,
@@ -690,7 +782,7 @@ function buildAdviceSentence(metrics) {
 
 function buildAdviceText(metrics, adviceSentence) {
   return [
-    `📊 Bu oy ${formatPercent(metrics.spentPercent)}% sarflandi. Qolgan balans: ${formatMoney(metrics.remainingBalance)}.`,
+    `📊 Bu oy sof xarajat ${formatPercent(metrics.spentPercent)}%. Qolgan balans: ${formatMoney(metrics.remainingBalance)}.`,
     '',
     `Eng ko'p xarajat: ${metrics.topCategory.name} (${formatMoney(metrics.topCategory.amount)}).`,
     '',
@@ -712,7 +804,9 @@ function buildAnalysisPrompt(metrics) {
     "Ma'lumotlar:",
     `- Oylik maosh: ${formatMoney(metrics.salary)}`,
     `- Bugungi kun: oyning ${metrics.dayOfMonth}-kuni, ${metrics.daysRemaining} kun qolgan`,
-    `- Jami sarflangan: ${formatMoney(metrics.totalSpent)} (${formatPercent(metrics.spentPercent)}%)`,
+    `- Jami xarajat: ${formatMoney(metrics.totalSpent)}`,
+    `- Qo'shimcha kirim: ${formatMoney(metrics.totalIncome)}`,
+    `- Sof xarajat (xarajat - kirim): ${formatMoney(metrics.netSpent)} (${formatPercent(metrics.spentPercent)}%)`,
     `- Qolgan balans: ${formatMoney(metrics.remainingBalance)}`,
     `- Kategoriyalar: ${categoryList}`,
     `- Majburiy xarajatlar (kamaytirib bo'lmaydi): ${fixedList}`,
@@ -737,7 +831,7 @@ function buildGeminiAdviceResponse(metrics, rawAdviceText) {
   const adviceText = truncateAdviceText(rawAdviceText, 500, { preferCompleteSentence: true });
 
   return [
-    `📊 Bu oy ${formatPercent(metrics.spentPercent)}% sarflandi. Qolgan balans: ${formatMoney(metrics.remainingBalance)}.`,
+    `📊 Bu oy sof xarajat ${formatPercent(metrics.spentPercent)}%. Qolgan balans: ${formatMoney(metrics.remainingBalance)}.`,
     '',
     adviceText || AI_ANALYSIS_UNAVAILABLE_MESSAGE
   ].join('\n');
@@ -752,15 +846,22 @@ async function categorizeExpense(text) {
   const cleanText = compactInput(text, 200);
 
   if (!cleanText) {
-    throw new Error("Xarajat matni bo'sh bo'lmasligi kerak.");
+    throw new Error("Operatsiya matni bo'sh bo'lmasligi kerak.");
   }
 
   const localFallback = parseExpensesLocally(cleanText);
   const prompt = [
-    "Quyidagi matnda bitta yoki bir nechta xarajat bo'lishi mumkin.",
-    "Har bir xarajatni alohida summa, kategoriya va izoh sifatida JSON massiv qilib qaytar.",
+    "Quyidagi matnda bitta yoki bir nechta moliyaviy operatsiya bo'lishi mumkin.",
+    "Har bir operatsiyani alohida summa, type, kategoriya va izoh sifatida JSON massiv qilib qaytar.",
     "Ajratuvchilar '+', ',', ';', 'va', yangi qator yoki oddiy bo'shliq bo'lishi mumkin.",
-    `Kategoriyalar faqat shu ro'yxatdan bo'lsin: ${CATEGORIES.join(', ')}.`,
+    "Matndan bu xarajat (chiqim) yoki daromad (kirim) ekanini aniqla.",
+    '',
+    "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', '+' belgisi bilan boshlangan summa, 'kirim', 'daromad' so'zlari.",
+    '',
+    "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
+    '',
+    "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila (kirim uchun boshqa kategoriyalar kerak emas, hammasi 'Kirim' deb belgilansin). Agar CHIQIM bo'lsa, type='expense' va mavjud kategoriyalar ro'yxatidan birini tanla.",
+    `Chiqim kategoriyalari faqat shu ro'yxatdan bo'lsin: ${CATEGORIES.join(', ')}.`,
     "Kommunal faqat svet, gaz, suv, internet uchun; kvartira ijarasi yoki uy to'lovi Kommunal emas, Uy-joy.",
     "Boshqa kategoriyasini faqat aniq hech qaysi toifaga kirmagan holatda ishlat.",
     "Kategoriyalarni to'g'ri tanlash uchun misollar:",
@@ -771,8 +872,8 @@ async function categorizeExpense(text) {
     "- 'kredit to'lovi', 'bo'lib to'lash', 'oylik to'lov' -> Bo'lib to'lash",
     "- 'o'qish', 'kurs', 'repetitor', 'kitob' -> Ta'lim",
     "Faqat JSON massiv qaytar, boshqa hech narsa yozma.",
-    'JSON formati aniq shunday bolsin: [{"amount":25000,"category":"Oziq-ovqat","note":"nonga"},{"amount":15000,"category":"Transport","note":"taxi"}].',
-    'Masalan, "532000+586000 o\'qish va telefon" uchun [{"amount":532000,"category":"Ta\'lim","note":"o\'qish"},{"amount":586000,"category":"Texnika","note":"telefon"}] qaytar.',
+    'JSON formati aniq shunday bolsin: [{"amount":25000,"type":"expense","category":"Oziq-ovqat","note":"nonga"},{"amount":50000,"type":"income","category":"Kirim","note":"qarz qaytdi"}].',
+    'Masalan, "20000 non, +50000 qarz qaytdi" uchun [{"amount":20000,"type":"expense","category":"Oziq-ovqat","note":"non"},{"amount":50000,"type":"income","category":"Kirim","note":"qarz qaytdi"}] qaytar.',
     `Matn: "${cleanText.replace(/"/g, '\\"')}"`
   ].join('\n');
 
@@ -827,13 +928,17 @@ async function categorizeExpense(text) {
 async function categorizeVoiceExpense(fileUrl, mimeType = 'audio/ogg') {
   const audioData = await fetchAsBase64(fileUrl);
   const prompt = [
-    "Ovozli xabardagi xarajatni tinglab, summa va kategoriyani JSON formatida ajrat.",
-    `Kategoriya faqat shu ro'yxatdan bo'lsin: [${CATEGORIES.join(', ')}].`,
+    "Ovozli xabardagi moliyaviy operatsiyani tinglab, summa, type, kategoriya va izohni JSON formatida ajrat.",
+    "Matndan bu xarajat (chiqim) yoki daromad (kirim) ekanini aniqla.",
+    "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', 'kirim', 'daromad' so'zlari.",
+    "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
+    "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila. Agar CHIQIM bo'lsa, type='expense' va mavjud kategoriyalar ro'yxatidan birini tanla.",
+    `Chiqim kategoriyasi faqat shu ro'yxatdan bo'lsin: [${CATEGORIES.join(', ')}].`,
     "Kommunal faqat svet, gaz, suv, internet; kvartira ijarasi yoki uy to'lovi -> Uy-joy.",
     "Telefon/noutbuk/maishiy texnika -> Texnika. O'qish/kurs/kitob -> Ta'lim. Ota-onaga yoki qarindoshga pul -> Oilaviy yordam.",
     "Kredit, bo'lib to'lash, oylik muntazam to'lov -> Bo'lib to'lash.",
     "Faqat JSON qaytar, boshqa hech narsa yozma.",
-    'JSON formati aniq shunday bolsin: {"amount":25000,"category":"Oziq-ovqat","note":"nonga"}.',
+    'JSON formati aniq shunday bolsin: {"amount":25000,"type":"expense","category":"Oziq-ovqat","note":"nonga"}.',
     "Agar kategoriya aniq bo'lmasa, Boshqa tanla. Note qismiga qisqa mazmun yoz."
   ].join('\n');
 
@@ -891,6 +996,8 @@ async function generateAdvice(userData) {
   debugAi('generateAdvice.metrics', {
     salary: metrics.salary,
     totalSpent: metrics.totalSpent,
+    totalIncome: metrics.totalIncome,
+    netSpent: metrics.netSpent,
     spentPercent: metrics.spentPercent,
     remainingBalance: metrics.remainingBalance,
     dayOfMonth: metrics.dayOfMonth,
@@ -933,7 +1040,7 @@ function buildPlanGoalPrompt({ planText, salary, totalSpent }) {
     '',
     "Foydalanuvchining joriy holati (kontekst uchun, taqqoslash uchun):",
     `Keyingi oy kutilayotgan daromad: ${formatMoney(salary)}`,
-    `Shu oy haqiqiy xarajati: ${formatMoney(totalSpent)}`,
+    `Shu oy haqiqiy sof xarajati (xarajat - kirim): ${formatMoney(totalSpent)}`,
     '',
     'Vazifang:',
     '1. Yozilgan reja xarajatlarini jamla, umumiy summani hisobla.',
@@ -979,6 +1086,7 @@ async function generatePlanGoalAnalysis(planData) {
 
 module.exports = {
   CATEGORIES,
+  INCOME_CATEGORY,
   FIXED_CATEGORIES,
   SIMPLE_FLEXIBLE_CATEGORIES,
   EASY_FLEXIBLE_CATEGORIES,
@@ -992,6 +1100,7 @@ module.exports = {
   buildGeminiAdviceResponse,
   buildPlanGoalPrompt,
   categorizeExpense,
+  categorizeTransaction: categorizeExpense,
   categorizeVoiceExpense,
   generateLocalAdvice,
   generatePlanGoalAnalysis,

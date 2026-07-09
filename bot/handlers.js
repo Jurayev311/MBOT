@@ -481,7 +481,8 @@ function isPlanGoalButtonText(text) {
 function formatReport(user, summary) {
   const salary = Number(user.current_salary || 0);
   const totalSpent = Number(summary.totalSpent || 0);
-  const balance = salary - totalSpent;
+  const totalIncome = Number(summary.totalIncome || 0);
+  const balance = salary - totalSpent + totalIncome;
   const categoryLines = Object.entries(summary.byCategory)
     .filter(([, amount]) => Number(amount) > 0)
     .map(([category, amount]) => `- ${category}: ${formatMoney(amount)}`);
@@ -492,6 +493,7 @@ function formatReport(user, summary) {
     `📊 ${summary.month} hisobot`,
     '',
     `Maosh: ${formatMoney(salary)}`,
+    `➕ Qo'shimcha kirim: ${formatMoney(totalIncome)}`,
     `Jami xarajat: ${formatMoney(totalSpent)}${salary > 0 ? ` (${percent}%)` : ''}`,
     `Qolgan balans: ${formatMoney(balance)}`,
     '',
@@ -847,13 +849,26 @@ function buildAdminDeleteConfirmMarkup(user, page) {
 
 function formatExpenseLabel(expense) {
   const note = String(expense?.note || '').trim();
-  const label = note || expense?.category || 'Xarajat';
+  const label = note || expense?.category || (expense?.type === 'income' ? 'Kirim' : 'Xarajat');
   return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function isIncomeTransaction(transaction) {
+  return transaction?.type === 'income';
+}
+
+function getTransactionKindLabel(transaction) {
+  return isIncomeTransaction(transaction) ? 'Kirim' : 'Xarajat';
+}
+
+function formatTransactionAmount(transaction) {
+  const prefix = isIncomeTransaction(transaction) ? '+' : '';
+  return `${prefix}${formatMoney(transaction?.amount)}`;
 }
 
 function buildSkippedExpensesText(skippedCount) {
   return skippedCount > 0
-    ? `Limit tugagani sababli ${skippedCount} ta xarajat saqlanmadi.`
+    ? `Limit tugagani sababli ${skippedCount} ta operatsiya saqlanmadi.`
     : null;
 }
 
@@ -862,6 +877,17 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
 
   if (savedExpenses.length === 1) {
     const savedExpense = savedExpenses[0];
+
+    if (isIncomeTransaction(savedExpense)) {
+      return [
+        `✅ Kirim qo'shildi: +${formatMoney(savedExpense.amount)}`,
+        `Izoh: ${savedExpense.note || 'Kirim'}`,
+        `Yangi balans: ${formatMoney(balance)}`,
+        skippedText ? '' : null,
+        skippedText
+      ].filter((line) => line !== null).join('\n');
+    }
+
     return [
       `✅ Saqlandi: ${formatMoney(savedExpense.amount)}`,
       `Kategoriya: ${savedExpense.category}`,
@@ -871,18 +897,31 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
     ].filter((line) => line !== null).join('\n');
   }
 
-  const totalSaved = savedExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const totalExpense = savedExpenses
+    .filter((expense) => !isIncomeTransaction(expense))
+    .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const totalIncome = savedExpenses
+    .filter(isIncomeTransaction)
+    .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const hasExpense = totalExpense > 0;
+  const hasIncome = totalIncome > 0;
+  const heading = hasExpense && hasIncome
+    ? `✅ ${savedExpenses.length} ta operatsiya saqlandi:`
+    : hasIncome
+      ? `✅ ${savedExpenses.length} ta kirim saqlandi:`
+      : `✅ ${savedExpenses.length} ta xarajat saqlandi:`;
   const expenseLines = savedExpenses.map((expense, index) => (
-    `${index + 1}. ${formatExpenseLabel(expense)} — ${formatMoney(expense.amount)} (${expense.category})`
+    `${index + 1}. ${formatExpenseLabel(expense)} — ${formatTransactionAmount(expense)} (${expense.category})`
   ));
 
   return [
-    `✅ ${savedExpenses.length} ta xarajat saqlandi:`,
+    heading,
     '',
     expenseLines.join('\n'),
     '',
-    `Jami: ${formatMoney(totalSaved)}`,
-    `Qolgan balans: ${formatMoney(balance)}`,
+    hasExpense ? `Jami xarajat: ${formatMoney(totalExpense)}` : null,
+    hasIncome ? `Qo'shimcha kirim: ${formatMoney(totalIncome)}` : null,
+    hasIncome ? `Yangi balans: ${formatMoney(balance)}` : `Qolgan balans: ${formatMoney(balance)}`,
     skippedText ? '' : null,
     skippedText
   ].filter((line) => line !== null).join('\n');
@@ -890,7 +929,9 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0) {
 
 async function getCurrentBalance(user, month = user?.current_month || userService.getMonthKey()) {
   const summary = await expenseService.getMonthlySummary(user.id, month);
-  return Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
+  return Number(user.current_salary || 0)
+    - Number(summary.totalSpent || 0)
+    + Number(summary.totalIncome || 0);
 }
 
 async function sendLongMessage(bot, chatId, text) {
@@ -1103,7 +1144,7 @@ async function handlePlanGoalInput(bot, chatId, telegramId, user, stateData, tex
     const analysis = await generatePlanGoalAnalysis({
       planText,
       salary: planIncome,
-      totalSpent: Number(summary.totalSpent || 0)
+      totalSpent: Number(summary.netSpent || 0)
     });
 
     await userService.incrementDailyUsage(user, PLAN_GOAL_LIMIT_COST, 'text');
@@ -1177,7 +1218,7 @@ async function handleExpenseText(bot, chatId, user, text) {
   const cleanText = String(text || '').trim();
 
   if (!cleanText || cleanText.length > 200) {
-    await bot.sendMessage(chatId, "Xarajat matni 1 dan 200 belgigacha bo'lishi kerak.", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, "Xarajat yoki kirim matni 1 dan 200 belgigacha bo'lishi kerak.", MAIN_KEYBOARD);
     return;
   }
 
@@ -1194,12 +1235,12 @@ async function handleExpenseText(bot, chatId, user, text) {
       return;
     }
 
-    // Erkin matn Gemini orqali bir yoki bir nechta strukturali xarajatga aylantiriladi.
+    // Erkin matn Gemini orqali bir yoki bir nechta strukturali operatsiyaga aylantiriladi.
     const parsedExpenses = await categorizeExpense(cleanText);
     const expenses = (Array.isArray(parsedExpenses) ? parsedExpenses : [parsedExpenses]).filter(Boolean);
 
     if (!expenses.length) {
-      await bot.sendMessage(chatId, "Tushunmadim, qaytadan yozing. Masalan: 25000 nonga", MAIN_KEYBOARD);
+      await bot.sendMessage(chatId, "Tushunmadim, qaytadan yozing. Masalan: 25000 nonga yoki +50000 qarz qaytdi", MAIN_KEYBOARD);
       return;
     }
 
@@ -1227,7 +1268,9 @@ async function handleExpenseText(bot, chatId, user, text) {
     await userService.incrementDailyUsage(user, savedExpenses.length, 'text');
 
     const summary = await expenseService.getMonthlySummary(user.id, month);
-    const balance = Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
+    const balance = Number(user.current_salary || 0)
+      - Number(summary.totalSpent || 0)
+      + Number(summary.totalIncome || 0);
 
     const messageOptions = expenses.length === 1 && savedExpenses.length === 1 && skippedCount === 0
       ? getExpenseActionMarkup(savedExpenses[0], user.telegram_id)
@@ -1239,13 +1282,13 @@ async function handleExpenseText(bot, chatId, user, text) {
       messageOptions
     );
   } catch (error) {
-    console.error('Xarajatni qayta ishlashda xato:', error);
+    console.error('Operatsiyani qayta ishlashda xato:', error);
     if (error.code === 'AI_TEMPORARILY_UNAVAILABLE') {
       await bot.sendMessage(chatId, error.userMessage || "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
       return;
     }
 
-    await bot.sendMessage(chatId, "Tushunmadim, qaytadan yozing. Masalan: 25000 nonga", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, "Tushunmadim, qaytadan yozing. Masalan: 25000 nonga yoki +50000 qarz qaytdi", MAIN_KEYBOARD);
   }
 }
 
@@ -1302,7 +1345,7 @@ async function handleVoice(bot, msg) {
     const voice = msg.voice;
 
     if (!voice?.file_id) {
-      await bot.sendMessage(chatId, "Ovozli xabarni o'qib bo'lmadi. Xarajatni matn bilan yozib ko'ring.", MAIN_KEYBOARD);
+      await bot.sendMessage(chatId, "Ovozli xabarni o'qib bo'lmadi. Xarajat yoki kirimni matn bilan yozib ko'ring.", MAIN_KEYBOARD);
       return;
     }
 
@@ -1314,26 +1357,24 @@ async function handleVoice(bot, msg) {
     const savedExpense = await expenseService.createExpense(user.id, parsedExpense, month, 'voice');
     await userService.incrementDailyUsage(user, 1, 'voice');
     const summary = await expenseService.getMonthlySummary(user.id, month);
-    const balance = Number(user.current_salary || 0) - Number(summary.totalSpent || 0);
+    const balance = Number(user.current_salary || 0)
+      - Number(summary.totalSpent || 0)
+      + Number(summary.totalIncome || 0);
 
     await bot.sendMessage(
       chatId,
-      [
-        `✅ Ovozli xarajat saqlandi: ${formatMoney(savedExpense.amount)}`,
-        `Kategoriya: ${savedExpense.category}`,
-        `Qolgan balans: ${formatMoney(balance)}`
-      ].join('\n'),
+      buildSavedExpensesText([savedExpense], balance),
       getExpenseActionMarkup(savedExpense, user.telegram_id)
     );
   } catch (error) {
-    console.error('Ovozli xarajatni qayta ishlashda xato:', error);
+    console.error('Ovozli operatsiyani qayta ishlashda xato:', error);
 
     if (error.code === 'AI_TEMPORARILY_UNAVAILABLE') {
       await bot.sendMessage(chatId, error.userMessage || "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
       return;
     }
 
-    await bot.sendMessage(chatId, "Ovozli xabarni tushunmadim. Xarajatni matn bilan yozib ko'ring: 25000 nonga", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, "Ovozli xabarni tushunmadim. Matn bilan yozib ko'ring: 25000 nonga yoki +50000 qarz qaytdi", MAIN_KEYBOARD);
   }
 }
 
@@ -1523,7 +1564,7 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
   const telegramId = getTelegramId(query.from);
 
   if (String(expenseAction.telegramId) !== telegramId) {
-    await answerCallback(bot, query, 'Bu xarajat sizga tegishli emas.');
+    await answerCallback(bot, query, 'Bu yozuv sizga tegishli emas.');
     return;
   }
 
@@ -1536,7 +1577,7 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       await editCallbackMessageText(
         bot,
         query,
-        "Xarajat topilmadi yoki allaqachon o'chirilgan.",
+        "Yozuv topilmadi yoki allaqachon o'chirilgan.",
         { reply_markup: { inline_keyboard: [] } }
       );
       return;
@@ -1546,9 +1587,9 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       bot,
       query,
       [
-        "Bu xarajatni o'chirmoqchimisiz?",
+        `Bu ${getTransactionKindLabel(expense).toLowerCase()}ni o'chirmoqchimisiz?`,
         '',
-        `${formatMoney(expense.amount)} (${expense.category})`
+        `${formatTransactionAmount(expense)} (${expense.category})`
       ].join('\n'),
       getExpenseDeleteConfirmMarkup(expense.id, telegramId)
     );
@@ -1573,7 +1614,7 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       await editCallbackMessageText(
         bot,
         query,
-        `✅ Xarajat o'chirildi. Yangi balans: ${formatMoney(balance)}`,
+        `✅ ${getTransactionKindLabel(deletedExpense)} o'chirildi. Yangi balans: ${formatMoney(balance)}`,
         { reply_markup: { inline_keyboard: [] } }
       );
     } catch (error) {
@@ -1581,7 +1622,7 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
         await editCallbackMessageText(
           bot,
           query,
-          "Xarajat allaqachon o'chirilgan yoki topilmadi.",
+          "Yozuv allaqachon o'chirilgan yoki topilmadi.",
           { reply_markup: { inline_keyboard: [] } }
         );
         return;
@@ -1600,7 +1641,7 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       await editCallbackMessageText(
         bot,
         query,
-        "Xarajat topilmadi yoki allaqachon o'chirilgan.",
+        "Yozuv topilmadi yoki allaqachon o'chirilgan.",
         { reply_markup: { inline_keyboard: [] } }
       );
       return;
@@ -1611,6 +1652,8 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       expenseId: expense.id,
       oldAmount: Number(expense.amount || 0),
       category: expense.category,
+      type: expense.type,
+      note: expense.note,
       month: expense.month || user.current_month || userService.getMonthKey()
     });
     await bot.sendMessage(query.message.chat.id, "Yangi summani kiriting (so'mda):", MAIN_KEYBOARD);
@@ -1801,7 +1844,7 @@ async function handleExpenseEditAmountInput(bot, chatId, telegramId, user, state
 
     if (!existingExpense) {
       clearUserState(telegramId);
-      await bot.sendMessage(chatId, "Tahrirlanadigan xarajat topilmadi yoki allaqachon o'chirilgan.", MAIN_KEYBOARD);
+      await bot.sendMessage(chatId, "Tahrirlanadigan yozuv topilmadi yoki allaqachon o'chirilgan.", MAIN_KEYBOARD);
       return;
     }
 
@@ -1815,16 +1858,18 @@ async function handleExpenseEditAmountInput(bot, chatId, telegramId, user, state
     await bot.sendMessage(
       chatId,
       [
-        `✅ Yangilandi: ${formatMoney(oldAmount)} -> ${formatMoney(updatedExpense.amount)}`,
-        `Kategoriya: ${updatedExpense.category}`,
+        `✅ Yangilandi: ${formatTransactionAmount({ ...updatedExpense, amount: oldAmount })} -> ${formatTransactionAmount(updatedExpense)}`,
+        isIncomeTransaction(updatedExpense)
+          ? `Izoh: ${updatedExpense.note || 'Kirim'}`
+          : `Kategoriya: ${updatedExpense.category}`,
         `Yangi balans: ${formatMoney(balance)}`
       ].join('\n'),
       MAIN_KEYBOARD
     );
   } catch (error) {
-    console.error('Xarajatni tahrirlashda xato:', error);
+    console.error('Yozuvni tahrirlashda xato:', error);
     clearUserState(telegramId);
-    await bot.sendMessage(chatId, "Xarajatni tahrirlashda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, "Yozuvni tahrirlashda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
   }
 }
 
