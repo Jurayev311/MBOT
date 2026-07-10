@@ -116,8 +116,17 @@ create table if not exists public.expenses (
       'Sog''liq',
       'Ta''lim',
       'Texnika',
+      'Aloqa',
+      'Obuna va servislar',
       'Kiyim-kechak',
       'Bo''lib to''lash',
+      'Qarz',
+      'Avtomobil',
+      'Uy-ro''zg''or',
+      'Soliq va jarima',
+      'Shaxsiy parvarish',
+      'Sayohat',
+      'Ish va biznes',
       'Oilaviy yordam',
       'Ko''ngilochar',
       'Kirim',
@@ -154,8 +163,17 @@ alter table public.expenses
       'Sog''liq',
       'Ta''lim',
       'Texnika',
+      'Aloqa',
+      'Obuna va servislar',
       'Kiyim-kechak',
       'Bo''lib to''lash',
+      'Qarz',
+      'Avtomobil',
+      'Uy-ro''zg''or',
+      'Soliq va jarima',
+      'Shaxsiy parvarish',
+      'Sayohat',
+      'Ish va biznes',
       'Oilaviy yordam',
       'Ko''ngilochar',
       'Kirim',
@@ -222,8 +240,17 @@ create table if not exists public.budget_plan_items (
       'Sog''liq',
       'Ta''lim',
       'Texnika',
+      'Aloqa',
+      'Obuna va servislar',
       'Kiyim-kechak',
       'Bo''lib to''lash',
+      'Qarz',
+      'Avtomobil',
+      'Uy-ro''zg''or',
+      'Soliq va jarima',
+      'Shaxsiy parvarish',
+      'Sayohat',
+      'Ish va biznes',
       'Oilaviy yordam',
       'Ko''ngilochar',
       'Boshqa'
@@ -232,6 +259,36 @@ create table if not exists public.budget_plan_items (
   planned_amount numeric not null check (planned_amount > 0),
   created_at timestamp with time zone default now()
 );
+
+alter table public.budget_plan_items drop constraint if exists budget_plan_items_category_check;
+alter table public.budget_plan_items drop constraint if exists budget_plan_items_category_valid;
+alter table public.budget_plan_items
+  add constraint budget_plan_items_category_valid
+  check (
+    category in (
+      'Oziq-ovqat',
+      'Transport',
+      'Kommunal',
+      'Uy-joy',
+      'Sog''liq',
+      'Ta''lim',
+      'Texnika',
+      'Aloqa',
+      'Obuna va servislar',
+      'Kiyim-kechak',
+      'Bo''lib to''lash',
+      'Qarz',
+      'Avtomobil',
+      'Uy-ro''zg''or',
+      'Soliq va jarima',
+      'Shaxsiy parvarish',
+      'Sayohat',
+      'Ish va biznes',
+      'Oilaviy yordam',
+      'Ko''ngilochar',
+      'Boshqa'
+    )
+  ) not valid;
 
 create table if not exists public.api_usage_log (
   id uuid primary key default gen_random_uuid(),

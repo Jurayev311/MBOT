@@ -1,6 +1,12 @@
 const ExcelJS = require('exceljs');
 
-const { categorizeExpense, categorizeVoiceExpense, generateAdvice, generatePlanGoalAnalysis } = require('../services/ai');
+const {
+  categorizeExpense,
+  categorizeVoiceExpense,
+  generateAdvice,
+  generatePlanGoalAnalysis,
+  parseExpensesLocally
+} = require('../services/ai');
 const apiUsageService = require('../services/apiUsageService');
 const budgetPlanService = require('../services/budgetPlanService');
 const expenseService = require('../services/expenseService');
@@ -84,7 +90,7 @@ const PLAN_GOAL_LIMIT_COST = 15;
 const AMOUNT_PARSE_ERROR_TEXT = "Summani tushunmadim. Masalan: 15000, 15 ming, yoki 1.5 mln kabi yozing.";
 const EXPENSE_TEXT_MAX_LENGTH = 200;
 const BUDGET_PLAN_TEXT_MIN_LENGTH = 10;
-const BUDGET_PLAN_TEXT_MAX_LENGTH = 2000;
+const BUDGET_PLAN_TEXT_MAX_LENGTH = 4000;
 const rateBuckets = new Map();
 const userStates = new Map();
 const consumedCallbackMessages = new Map();
@@ -122,11 +128,11 @@ function validateExpenseText(text) {
 function validateBudgetPlanText(text) {
   const cleanText = String(text || '').trim();
 
-  if (cleanText.length < BUDGET_PLAN_TEXT_MIN_LENGTH || cleanText.length > BUDGET_PLAN_TEXT_MAX_LENGTH) {
+  if (cleanText.length < BUDGET_PLAN_TEXT_MIN_LENGTH) {
     return {
       ok: false,
       text: cleanText,
-      message: `Reja matni ${BUDGET_PLAN_TEXT_MIN_LENGTH} dan ${BUDGET_PLAN_TEXT_MAX_LENGTH} belgigacha bo'lishi kerak.`
+      message: "Rejani biroz batafsilroq yozing. Masalan: ovqatga 800000, taxiga 300000"
     };
   }
 
@@ -1636,6 +1642,53 @@ async function handleBudgetPlanDateInput(bot, chatId, telegramId, text) {
   );
 }
 
+function getExpenseTransactions(transactions) {
+  return (Array.isArray(transactions) ? transactions : [transactions])
+    .filter((transaction) => transaction && !isIncomeTransaction(transaction));
+}
+
+function mapTransactionsToPlanItems(transactions) {
+  return transactions.map((transaction) => ({
+    category: transaction.category,
+    amount: transaction.amount
+  }));
+}
+
+async function parseBudgetPlanItems(planText) {
+  const localTransactions = getExpenseTransactions(
+    parseExpensesLocally(planText, { maxLength: BUDGET_PLAN_TEXT_MAX_LENGTH }) || []
+  );
+  let parsedTransactions = [];
+
+  try {
+    parsedTransactions = getExpenseTransactions(await categorizeExpense(planText, {
+      maxLength: BUDGET_PLAN_TEXT_MAX_LENGTH
+    }));
+  } catch (error) {
+    if (!localTransactions.length) {
+      throw error;
+    }
+
+    console.warn('[BUDGET_PLAN_WARN] AI categorization failed, using local parser:', {
+      message: error.message,
+      code: error.code,
+      localCount: localTransactions.length
+    });
+  }
+
+  const transactions = localTransactions.length > parsedTransactions.length
+    ? localTransactions
+    : parsedTransactions;
+  const mappedItems = mapTransactionsToPlanItems(transactions);
+  const items = budgetPlanService.normalizePlanItems(mappedItems);
+
+  return {
+    items,
+    source: transactions === localTransactions ? 'local' : 'ai',
+    transactionCount: transactions.length
+  };
+}
+
 async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateData, text) {
   const validation = validateBudgetPlanText(text);
   const planText = validation.text;
@@ -1657,68 +1710,12 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
     return;
   }
 
+  let parsedPlan;
+
   try {
-    console.log('[BUDGET_PLAN_DEBUG] Starting categorizeExpense with text:', planText.substring(0, 100));
-    
-    const parsedTransactions = await categorizeExpense(planText, {
-      maxLength: BUDGET_PLAN_TEXT_MAX_LENGTH
-    });
-    console.log('[BUDGET_PLAN_DEBUG] categorizeExpense returned:', {
-      count: Array.isArray(parsedTransactions) ? parsedTransactions.length : 1,
-      type: typeof parsedTransactions,
-      isArray: Array.isArray(parsedTransactions)
-    });
-    
-    const transactions = (Array.isArray(parsedTransactions) ? parsedTransactions : [parsedTransactions])
-      .filter((transaction) => transaction && !isIncomeTransaction(transaction));
-    console.log('[BUDGET_PLAN_DEBUG] After income filter:', {
-      count: transactions.length,
-      transactions: transactions.map(t => ({ amount: t.amount, category: t.category }))
-    });
-    
-    const mappedItems = transactions.map((transaction) => ({
-      category: transaction.category,
-      amount: transaction.amount
-    }));
-    console.log('[BUDGET_PLAN_DEBUG] Mapped items for normalizePlanItems:', {
-      count: mappedItems.length,
-      items: mappedItems
-    });
-    
-    const items = budgetPlanService.normalizePlanItems(mappedItems);
-    console.log('[BUDGET_PLAN_DEBUG] After normalizePlanItems:', {
-      count: items.length,
-      items: items
-    });
-
-    if (!items.length) {
-      await bot.sendMessage(
-        chatId,
-        "Rejada kategoriya va summa topilmadi. Masalan: Oziq-ovqat 800000, Transport 300000",
-        getBudgetPlanCancelMarkup(telegramId)
-      );
-      return;
-    }
-
-    console.log('[BUDGET_PLAN_DEBUG] Creating budget plan with dates:', {
-      startDate: stateData.startDate,
-      endDate: stateData.endDate,
-      itemsCount: items.length
-    });
-
-    const plan = await budgetPlanService.createBudgetPlan(user.id, {
-      startDate: stateData.startDate,
-      endDate: stateData.endDate,
-      items
-    });
-    
-    console.log('[BUDGET_PLAN_DEBUG] Budget plan created successfully:', { planId: plan.id });
-
-    await userService.incrementDailyUsage(user, 1, 'text');
-    clearUserState(telegramId);
-    await bot.sendMessage(chatId, buildBudgetPlanSavedText(plan, user.current_salary), MAIN_KEYBOARD);
+    parsedPlan = await parseBudgetPlanItems(planText);
   } catch (error) {
-    console.error('[BUDGET_PLAN_ERROR] Full error:', {
+    console.error('[BUDGET_PLAN_PARSE_ERROR] Full error:', {
       message: error.message,
       code: error.code,
       stack: error.stack
@@ -1733,18 +1730,45 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
       return;
     }
 
-    if (error.code === 'AI_CATEGORIZATION_FAILED') {
-      await bot.sendMessage(
-        chatId,
-        error.userMessage,
-        getBudgetPlanCancelMarkup(telegramId)
-      );
-      return;
-    }
+    await bot.sendMessage(
+      chatId,
+      "Rejani tushunmadim. Masalan: ovqatga 800000, taxiga 300000, kvartiraga 1200000",
+      getBudgetPlanCancelMarkup(telegramId)
+    );
+    return;
+  }
+
+  if (!parsedPlan.items.length) {
+    await bot.sendMessage(
+      chatId,
+      "Rejada summa topilmadi. Masalan: ovqatga 800000, taxiga 300000",
+      getBudgetPlanCancelMarkup(telegramId)
+    );
+    return;
+  }
+
+  try {
+    const plan = await budgetPlanService.createBudgetPlan(user.id, {
+      startDate: stateData.startDate,
+      endDate: stateData.endDate,
+      items: parsedPlan.items
+    });
+
+    await userService.incrementDailyUsage(user, 1, 'text');
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, buildBudgetPlanSavedText(plan, user.current_salary), MAIN_KEYBOARD);
+  } catch (error) {
+    console.error('[BUDGET_PLAN_SAVE_ERROR] Full error:', {
+      message: error.message,
+      code: error.code,
+      parsedSource: parsedPlan.source,
+      itemCount: parsedPlan.items.length,
+      stack: error.stack
+    });
 
     await bot.sendMessage(
       chatId,
-      "Rejani tushunmadim. Iltimos, har bir bandni alohida qatorda yozing. Masalan:\n- Oziq-ovqat 800000\n- Transport 300000\n- Kommunal 150000",
+      "Reja tushunildi, lekin saqlashda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.",
       getBudgetPlanCancelMarkup(telegramId)
     );
   }

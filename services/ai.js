@@ -12,24 +12,46 @@ const CATEGORIES = [
   "Sog'liq",
   "Ta'lim",
   'Texnika',
+  'Aloqa',
+  'Obuna va servislar',
   'Kiyim-kechak',
   "Bo'lib to'lash",
+  'Qarz',
+  'Avtomobil',
+  "Uy-ro'zg'or",
+  'Soliq va jarima',
+  'Shaxsiy parvarish',
+  'Sayohat',
+  'Ish va biznes',
   'Oilaviy yordam',
   "Ko'ngilochar",
   'Boshqa'
 ];
 const INCOME_CATEGORY = 'Kirim';
 
-const FIXED_CATEGORIES = ['Kommunal', "Sog'liq", 'Uy-joy', "Bo'lib to'lash"];
+const FIXED_CATEGORIES = [
+  'Kommunal',
+  "Sog'liq",
+  'Uy-joy',
+  "Bo'lib to'lash",
+  'Qarz',
+  'Aloqa',
+  'Obuna va servislar',
+  'Soliq va jarima'
+];
 const SIMPLE_FLEXIBLE_CATEGORIES = [
   'Oziq-ovqat',
   "Ta'lim",
   'Texnika',
   'Kiyim-kechak',
+  'Avtomobil',
+  "Uy-ro'zg'or",
+  'Shaxsiy parvarish',
+  'Ish va biznes',
   'Oilaviy yordam',
   'Boshqa'
 ];
-const EASY_FLEXIBLE_CATEGORIES = ['Transport', "Ko'ngilochar"];
+const EASY_FLEXIBLE_CATEGORIES = ['Transport', 'Sayohat', "Ko'ngilochar"];
 const FLEXIBLE_CATEGORIES = [...SIMPLE_FLEXIBLE_CATEGORIES, ...EASY_FLEXIBLE_CATEGORIES];
 const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
 const AI_BUSY_MESSAGE = "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.";
@@ -69,8 +91,12 @@ const CATEGORY_KEYWORDS = [
     keywords: ['kvartira', 'ijara', 'uy-joy', 'uy joy', 'uy uchun', 'kvartira uchun', 'arenda', 'renta']
   },
   {
+    category: 'Qarz',
+    keywords: ['qarz', 'qarzim', 'qarzga', 'qarzni', 'zaym', 'debt']
+  },
+  {
     category: "Bo'lib to'lash",
-    keywords: ['kredit', "bo'lib", 'bolib', 'rassrochka', 'muddatli', 'oylik tolov', "oylik to'lov", 'muntazam tolov', "muntazam to'lov"]
+    keywords: ['kredit', "bo'lib", 'bolib', 'rassrochka', 'muddatli', 'oylik tolov', "oylik to'lov", 'muntazam tolov', "muntazam to'lov", 'payme', 'paymeni', 'paymedagi']
   },
   {
     category: 'Oilaviy yordam',
@@ -81,8 +107,16 @@ const CATEGORY_KEYWORDS = [
     keywords: ["o'qish", 'oqish', 'kontrakt', 'universitet', 'maktab', 'kurs', 'repetitor', 'kitob', 'daftar', "ta'lim", 'talim']
   },
   {
+    category: 'Aloqa',
+    keywords: ['aloqa', 'mobil aloqa', "telefon to'lovi", 'telefon tolovi', 'sim karta', 'tarif', 'uzmobile', 'ucell', 'beeline', 'mobiuz', 'humans', 'internet paketi']
+  },
+  {
+    category: 'Obuna va servislar',
+    keywords: ['obuna', 'subscription', 'servis', 'xizmat', 'ai', 'chatgpt', 'gemini', 'hosting', 'vpn', 'cloud', 'kamera tolov', "kamera to'lov", 'kameralar tolovlari', "kameralar to'lovlari", 'netflix', 'spotify']
+  },
+  {
     category: 'Texnika',
-    keywords: ['telefon', 'smartfon', 'iphone', 'android', 'noutbuk', 'laptop', 'kompyuter', 'planshet', 'televizor', 'muzlatkich', 'konditsioner', 'texnika']
+    keywords: ['telefon', 'smartfon', 'iphone', 'android', 'noutbuk', 'laptop', 'kompyuter', 'planshet', 'televizor', 'muzlatkich', 'konditsioner', 'kamera', 'printer', 'texnika']
   },
   {
     category: 'Transport',
@@ -90,15 +124,39 @@ const CATEGORY_KEYWORDS = [
   },
   {
     category: 'Oziq-ovqat',
-    keywords: ['non', 'nonga', 'ovqat', 'osh', 'somsa', 'lavash', 'market', 'supermarket', 'meva', 'sabzavot', 'choy', 'qahva', 'ichimlik', 'yeb', 'ichar', 'yeb-ichar']
+    keywords: ['non', 'nonga', 'ovqat', 'osh', 'somsa', 'lavash', 'bozor', 'bozorga', 'market', 'supermarket', 'meva', 'sabzavot', 'choy', 'qahva', 'ichimlik', 'yeb', 'ichar', 'yeb-ichar']
   },
   {
     category: 'Kommunal',
     keywords: ['kommunal', 'svet', 'elektr', 'gaz', 'suv', 'internet']
   },
   {
+    category: 'Avtomobil',
+    keywords: ['avtomobil', 'mashina', 'avto', 'avtoservis', 'zapchast', 'ehtiyot qism', 'moy almashtirish', 'parkovka', 'parking']
+  },
+  {
+    category: "Uy-ro'zg'or",
+    keywords: ['mebel', 'idish', "uy-ro'zg'or", 'uy rozgor', 'roʻzgʻor', 'remont', "ta'mir", 'tamir', 'qurilish', 'maishiy']
+  },
+  {
+    category: 'Soliq va jarima',
+    keywords: ['soliq', 'nalog', 'jarima', 'shtraf', 'penya', 'boj']
+  },
+  {
+    category: 'Shaxsiy parvarish',
+    keywords: ['sartarosh', 'barber', 'salon', 'kosmetika', 'parfyum', 'atir', 'soch', "go'zallik", 'gozallik', 'parvarish']
+  },
+  {
+    category: 'Sayohat',
+    keywords: ['sayohat', 'mehmonxona', 'hotel', 'avia', 'samolyot', 'poyezd', 'poezd', 'chipta', 'bilet', 'turizm']
+  },
+  {
+    category: 'Ish va biznes',
+    keywords: ['biznes', 'ofis', 'reklama', 'kanselyariya', 'xodim', 'ish uchun', 'ishga', 'crm', 'saas']
+  },
+  {
     category: "Ko'ngilochar",
-    keywords: ['kino', 'konsert', "o'yin", 'oyin', 'netflix', 'spotify', 'dam olish', 'kafe', 'restoran', 'sayohat']
+    keywords: ['kino', 'konsert', "o'yin", 'oyin', 'dam olish', 'kafe', 'restoran']
   },
   {
     category: 'Kiyim-kechak',
@@ -122,6 +180,22 @@ const CATEGORY_ALIASES = {
   'bolib tolovi': "Bo'lib to'lash",
   "bo'lib to'lovi": "Bo'lib to'lash",
   kredit: "Bo'lib to'lash",
+  payme: "Bo'lib to'lash",
+  qarz: 'Qarz',
+  qarzga: 'Qarz',
+  aloqa: 'Aloqa',
+  obuna: 'Obuna va servislar',
+  servis: 'Obuna va servislar',
+  'ai servis': 'Obuna va servislar',
+  avtomobil: 'Avtomobil',
+  mashina: 'Avtomobil',
+  'uy rozgor': "Uy-ro'zg'or",
+  "uy-ro'zg'or": "Uy-ro'zg'or",
+  soliq: 'Soliq va jarima',
+  jarima: 'Soliq va jarima',
+  parvarish: 'Shaxsiy parvarish',
+  sayohat: 'Sayohat',
+  biznes: 'Ish va biznes',
   'oilaviy yordam': 'Oilaviy yordam',
   oila: 'Oilaviy yordam'
 };
@@ -933,17 +1007,27 @@ async function categorizeExpense(text, options = {}) {
       '',
       "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
       '',
-      "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila (kirim uchun boshqa kategoriyalar kerak emas, hammasi 'Kirim' deb belgilansin). Agar CHIQIM bo'lsa, type='expense' va mavjud kategoriyalar ro'yxatidan birini tanla.",
-      `Chiqim kategoriyalari faqat shu ro'yxatdan bo'lsin: ${CATEGORIES.join(', ')}.`,
+      "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila (kirim uchun boshqa kategoriyalar kerak emas, hammasi 'Kirim' deb belgilansin). Agar CHIQIM bo'lsa, type='expense' va ma'nosi eng yaqin kategoriyani tanla.",
+      `Chiqim kategoriyalari: ${CATEGORIES.join(', ')}.`,
+      "Foydalanuvchi kategoriya nomini aniq yozishi shart emas; oddiy so'zlardan ma'nosini tushun va eng mos kategoriyaga joyla.",
       "Kommunal faqat svet, gaz, suv, internet uchun; kvartira ijarasi yoki uy to'lovi Kommunal emas, Uy-joy.",
       "Boshqa kategoriyasini faqat aniq hech qaysi toifaga kirmagan holatda ishlat.",
       "Kategoriyalarni to'g'ri tanlash uchun misollar:",
       "- 'kvartira uchun', 'ijaraga', 'uy to'lovi' -> Uy-joy",
       "- 'svet', 'gaz', 'internet', 'suv' -> Kommunal",
+      "- 'telefon to'lovi', 'mobil aloqa', 'tarif' -> Aloqa",
+      "- 'AI', 'ChatGPT', 'hosting', 'kamera/servis obunasi' -> Obuna va servislar",
       "- 'telefon sotib oldim', 'noutbuk', 'maishiy texnika' -> Texnika",
       "- 'dadamga', 'onamga', 'ukamga berdim', 'ota-onamga' -> Oilaviy yordam",
       "- 'kredit to'lovi', 'bo'lib to'lash', 'oylik to'lov' -> Bo'lib to'lash",
+      "- 'qarzga', 'qarz to'lovi', 'zaym' -> Qarz",
       "- 'o'qish', 'kurs', 'repetitor', 'kitob' -> Ta'lim",
+      "- 'mashina', 'avtoservis', 'moy almashtirish' -> Avtomobil",
+      "- 'mebel', 'remont', 'idish-tovoq' -> Uy-ro'zg'or",
+      "- 'soliq', 'jarima' -> Soliq va jarima",
+      "- 'sartarosh', 'salon', 'kosmetika' -> Shaxsiy parvarish",
+      "- 'sayohat', 'mehmonxona', 'avia chipta' -> Sayohat",
+      "- 'ofis', 'biznes', 'reklama' -> Ish va biznes",
       "MUHIM: Summalar turli formatda bo'lishi mumkin: 15000, 15 ming, 1.5 mln, 15k, yoki 15 so'm.",
       "Masallar: '532000 o'qish', '466 ming payme', '750000 kvartira', '350 ming dadam', '1.5 mln avtomobil', '500k non'",
       "Faqat JSON massiv qaytar, boshqa hech narsa yozma.",
@@ -1079,11 +1163,12 @@ async function categorizeVoiceExpense(fileUrl, mimeType = 'audio/ogg') {
     "Matndan bu xarajat (chiqim) yoki daromad (kirim) ekanini aniqla.",
     "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', 'kirim', 'daromad' so'zlari.",
     "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
-    "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila. Agar CHIQIM bo'lsa, type='expense' va mavjud kategoriyalar ro'yxatidan birini tanla.",
-    `Chiqim kategoriyasi faqat shu ro'yxatdan bo'lsin: [${CATEGORIES.join(', ')}].`,
+    "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila. Agar CHIQIM bo'lsa, type='expense' va ma'nosi eng yaqin kategoriyani tanla.",
+    `Chiqim kategoriyalari: [${CATEGORIES.join(', ')}].`,
     "Kommunal faqat svet, gaz, suv, internet; kvartira ijarasi yoki uy to'lovi -> Uy-joy.",
-    "Telefon/noutbuk/maishiy texnika -> Texnika. O'qish/kurs/kitob -> Ta'lim. Ota-onaga yoki qarindoshga pul -> Oilaviy yordam.",
-    "Kredit, bo'lib to'lash, oylik muntazam to'lov -> Bo'lib to'lash.",
+    "Telefon/noutbuk/maishiy texnika -> Texnika. Telefon to'lovi/mobil aloqa -> Aloqa. AI/obuna/hosting -> Obuna va servislar.",
+    "O'qish/kurs/kitob -> Ta'lim. Ota-onaga yoki qarindoshga pul -> Oilaviy yordam.",
+    "Kredit/bo'lib to'lash -> Bo'lib to'lash. Qarz/zaym -> Qarz.",
     "Faqat JSON qaytar, boshqa hech narsa yozma.",
     'JSON formati aniq shunday bolsin: {"amount":25000,"type":"expense","category":"Oziq-ovqat","note":"nonga"}.',
     "Agar kategoriya aniq bo'lmasa, Boshqa tanla. Note qismiga qisqa mazmun yoz."
