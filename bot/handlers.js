@@ -1620,13 +1620,36 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
   }
 
   try {
+    console.log('[BUDGET_PLAN_DEBUG] Starting categorizeExpense with text:', planText.substring(0, 100));
+    
     const parsedTransactions = await categorizeExpense(planText);
+    console.log('[BUDGET_PLAN_DEBUG] categorizeExpense returned:', {
+      count: Array.isArray(parsedTransactions) ? parsedTransactions.length : 1,
+      type: typeof parsedTransactions,
+      isArray: Array.isArray(parsedTransactions)
+    });
+    
     const transactions = (Array.isArray(parsedTransactions) ? parsedTransactions : [parsedTransactions])
       .filter((transaction) => transaction && !isIncomeTransaction(transaction));
-    const items = budgetPlanService.normalizePlanItems(transactions.map((transaction) => ({
+    console.log('[BUDGET_PLAN_DEBUG] After income filter:', {
+      count: transactions.length,
+      transactions: transactions.map(t => ({ amount: t.amount, category: t.category }))
+    });
+    
+    const mappedItems = transactions.map((transaction) => ({
       category: transaction.category,
       amount: transaction.amount
-    })));
+    }));
+    console.log('[BUDGET_PLAN_DEBUG] Mapped items for normalizePlanItems:', {
+      count: mappedItems.length,
+      items: mappedItems
+    });
+    
+    const items = budgetPlanService.normalizePlanItems(mappedItems);
+    console.log('[BUDGET_PLAN_DEBUG] After normalizePlanItems:', {
+      count: items.length,
+      items: items
+    });
 
     if (!items.length) {
       await bot.sendMessage(
@@ -1637,17 +1660,29 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
       return;
     }
 
+    console.log('[BUDGET_PLAN_DEBUG] Creating budget plan with dates:', {
+      startDate: stateData.startDate,
+      endDate: stateData.endDate,
+      itemsCount: items.length
+    });
+
     const plan = await budgetPlanService.createBudgetPlan(user.id, {
       startDate: stateData.startDate,
       endDate: stateData.endDate,
       items
     });
+    
+    console.log('[BUDGET_PLAN_DEBUG] Budget plan created successfully:', { planId: plan.id });
 
     await userService.incrementDailyUsage(user, 1, 'text');
     clearUserState(telegramId);
     await bot.sendMessage(chatId, buildBudgetPlanSavedText(plan, user.current_salary), MAIN_KEYBOARD);
   } catch (error) {
-    console.error('Byudjet rejasini saqlashda xato:', error);
+    console.error('[BUDGET_PLAN_ERROR] Full error:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    });
 
     if (error.code === 'AI_TEMPORARILY_UNAVAILABLE') {
       await bot.sendMessage(
