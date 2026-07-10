@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 
-const { CATEGORIES, categorizeExpense, categorizeVoiceExpense, generateAdvice, generatePlanGoalAnalysis } = require('../services/ai');
+const { categorizeExpense, categorizeVoiceExpense, generateAdvice, generatePlanGoalAnalysis } = require('../services/ai');
 const apiUsageService = require('../services/apiUsageService');
 const budgetPlanService = require('../services/budgetPlanService');
 const expenseService = require('../services/expenseService');
@@ -24,7 +24,8 @@ const BUDGET_PLAN_BUTTON_TEXT = '📆 Rejam';
 const BUDGET_PLAN_START_PREFIX = 'budget_start_';
 const BUDGET_PLAN_SKIP_PREFIX = 'budget_skip_';
 const BUDGET_PLAN_CANCEL_PREFIX = 'budget_cancel_';
-const BUDGET_PLAN_CATEGORIES = CATEGORIES.filter((category) => category !== 'Kirim');
+const BUDGET_PLAN_DATE_CONFIRM_PREFIX = 'budget_date_ok_';
+const BUDGET_PLAN_DATE_RETRY_PREFIX = 'budget_date_retry_';
 
 const CLEAR_CONFIRM_INLINE_KEYBOARD = {
   reply_markup: {
@@ -217,6 +218,19 @@ function getBudgetPlanCancelMarkup(telegramId) {
   };
 }
 
+function getBudgetPlanDateConfirmMarkup(telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✅ To'g'ri", callback_data: `${BUDGET_PLAN_DATE_CONFIRM_PREFIX}${telegramId}` },
+          { text: '✏️ Qayta kiritish', callback_data: `${BUDGET_PLAN_DATE_RETRY_PREFIX}${telegramId}` }
+        ]
+      ]
+    }
+  };
+}
+
 function getPlanGoalCancelMarkup() {
   return {
     reply_markup: {
@@ -281,6 +295,20 @@ function parseBudgetPlanCallback(data) {
     return {
       action: 'cancel',
       telegramId: value.slice(BUDGET_PLAN_CANCEL_PREFIX.length)
+    };
+  }
+
+  if (value.startsWith(BUDGET_PLAN_DATE_CONFIRM_PREFIX)) {
+    return {
+      action: 'dateConfirm',
+      telegramId: value.slice(BUDGET_PLAN_DATE_CONFIRM_PREFIX.length)
+    };
+  }
+
+  if (value.startsWith(BUDGET_PLAN_DATE_RETRY_PREFIX)) {
+    return {
+      action: 'dateRetry',
+      telegramId: value.slice(BUDGET_PLAN_DATE_RETRY_PREFIX.length)
     };
   }
 
@@ -675,24 +703,73 @@ function buildBudgetPlanDatePromptText() {
   ].join('\n');
 }
 
-function formatBudgetPlanDateRange(startDate, endDate) {
-  return `${budgetPlanService.formatDate(startDate)} — ${budgetPlanService.formatDate(endDate)}`;
+function buildBudgetPlanDateRetryText() {
+  return "Sana oralig'ini qayta yozing:";
 }
 
-function formatBudgetPlanCategoryList() {
-  return BUDGET_PLAN_CATEGORIES.join(', ');
+function parseBudgetDateKey(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3])
+  };
+}
+
+function formatBudgetPlanHumanDate(value, options = {}) {
+  const { includeYear = true } = options;
+  const parts = parseBudgetDateKey(value);
+  const monthNames = [
+    'yanvar',
+    'fevral',
+    'mart',
+    'aprel',
+    'may',
+    'iyun',
+    'iyul',
+    'avgust',
+    'sentabr',
+    'oktabr',
+    'noyabr',
+    'dekabr'
+  ];
+
+  if (!parts || parts.month < 1 || parts.month > 12) {
+    return budgetPlanService.formatDate(value);
+  }
+
+  const base = `${parts.day}-${monthNames[parts.month - 1]}`;
+  return includeYear ? `${base} ${parts.year}` : base;
+}
+
+function formatBudgetPlanDateRange(startDate, endDate) {
+  const startParts = parseBudgetDateKey(startDate);
+  const endParts = parseBudgetDateKey(endDate);
+
+  if (startParts && endParts && startParts.year === endParts.year) {
+    return `${formatBudgetPlanHumanDate(startDate, { includeYear: false })} — ${formatBudgetPlanHumanDate(endDate, { includeYear: false })} ${endParts.year}`;
+  }
+
+  return `${formatBudgetPlanHumanDate(startDate)} — ${formatBudgetPlanHumanDate(endDate)}`;
+}
+
+function buildBudgetPlanDateConfirmText(dateRange) {
+  return `Muddat: ${formatBudgetPlanDateRange(dateRange.startDate, dateRange.endDate)}. To'g'rimi?`;
 }
 
 function buildBudgetPlanItemsPromptText(startDate, endDate) {
   return [
     `✅ Muddat: ${formatBudgetPlanDateRange(startDate, endDate)}`,
     '',
-    'Endi shu muddat uchun kategoriya bo\'yicha reja summalarini yozing.',
+    "Endi shu muddat uchun taxminiy xarajatlaringizni yozing. Kategoriya nomlarini bilish shart emas - oddiy tilda yozing, men o'zim tushunaman.",
     '',
-    `Mavjud kategoriyalar: ${formatBudgetPlanCategoryList()}`,
-    '',
-    'Bir nechtasini birga yozishingiz mumkin. Misol:',
-    "'Oziq-ovqat 800000, Transport 300000, Uy-joy 1200000'"
+    'Barchasini BITTA xabarda yuboring. Misol:',
+    "'Ovqatga 800000, taxiga 300000, kvartiraga 1200000, telefon uchun 200000'"
   ].join('\n');
 }
 
@@ -701,9 +778,9 @@ function buildBudgetPlanContinueText(stateData = {}) {
 
   return [
     `Siz hozir reja tuzish jarayonidasiz (muddat: ${dateText}).`,
-    'Davom etish uchun kategoriya summalarini yozing, yoki bekor qilish uchun tugmani bosing:',
+    "Davom etish uchun taxminiy xarajatlaringizni oddiy tilda yozing, yoki bekor qilish uchun tugmani bosing:",
     '',
-    `Mavjud kategoriyalar: ${formatBudgetPlanCategoryList()}`
+    "Misol: 'Ovqatga 800000, taxiga 300000, kvartiraga 1200000'"
   ].join('\n');
 }
 
@@ -723,7 +800,7 @@ function buildBudgetPlanSavedText(plan, salary) {
   const outsideAmount = Number(salary || 0) - totalPlanned;
 
   return [
-    `✅ Rejangiz saqlandi (${budgetPlanService.formatDate(plan.start_date)} — ${budgetPlanService.formatDate(plan.end_date)}):`,
+    `✅ Rejangiz saqlandi (${formatBudgetPlanDateRange(plan.start_date, plan.end_date)}):`,
     '',
     formatBudgetPlanItemList(items),
     '',
@@ -745,7 +822,7 @@ function formatBudgetPlanProgressItem(item, index) {
 
 function buildBudgetPlanViewText(progress) {
   return [
-    `📆 Joriy reja (${budgetPlanService.formatDate(progress.plan.start_date)} — ${budgetPlanService.formatDate(progress.plan.end_date)}):`,
+    `📆 Joriy reja (${formatBudgetPlanDateRange(progress.plan.start_date, progress.plan.end_date)}):`,
     '',
     progress.items.map(formatBudgetPlanProgressItem).join('\n'),
     '',
@@ -1502,6 +1579,15 @@ async function startBudgetPlanSetup(bot, chatId, telegramId) {
   await bot.sendMessage(chatId, buildBudgetPlanDatePromptText(), getBudgetPlanCancelMarkup(telegramId));
 }
 
+async function askBudgetPlanItems(bot, chatId, telegramId, dateRange) {
+  setUserState(telegramId, 'awaiting_budget_plan_items', dateRange);
+  await bot.sendMessage(
+    chatId,
+    buildBudgetPlanItemsPromptText(dateRange.startDate, dateRange.endDate),
+    getBudgetPlanCancelMarkup(telegramId)
+  );
+}
+
 async function handleBudgetPlanDateInput(bot, chatId, telegramId, text) {
   const dateRange = budgetPlanService.parseBudgetDateRange(text);
 
@@ -1514,11 +1600,11 @@ async function handleBudgetPlanDateInput(bot, chatId, telegramId, text) {
     return;
   }
 
-  setUserState(telegramId, 'awaiting_budget_plan_items', dateRange);
+  setUserState(telegramId, 'awaiting_budget_plan_date_confirm', dateRange);
   await bot.sendMessage(
     chatId,
-    buildBudgetPlanItemsPromptText(dateRange.startDate, dateRange.endDate),
-    getBudgetPlanCancelMarkup(telegramId)
+    buildBudgetPlanDateConfirmText(dateRange),
+    getBudgetPlanDateConfirmMarkup(telegramId)
   );
 }
 
@@ -1625,7 +1711,7 @@ async function handleBudgetPlanActionInput(bot, chatId, telegramId, stateData, t
     });
     const currentPlan = await budgetPlanService.getAnyActiveBudgetPlan(stateData.userId);
     const dateText = currentPlan
-      ? `${budgetPlanService.formatDate(currentPlan.start_date)} — ${budgetPlanService.formatDate(currentPlan.end_date)}`
+      ? formatBudgetPlanDateRange(currentPlan.start_date, currentPlan.end_date)
       : "Noma'lum";
 
     await bot.sendMessage(
@@ -2359,6 +2445,25 @@ async function handleCallback(bot, query) {
         return;
       }
 
+      if (budgetPlanCallback.action === 'dateRetry') {
+        setUserState(telegramId, 'awaiting_budget_plan_dates');
+        await bot.sendMessage(chatId, buildBudgetPlanDateRetryText(), getBudgetPlanCancelMarkup(telegramId));
+        return;
+      }
+
+      if (budgetPlanCallback.action === 'dateConfirm') {
+        const state = getUserState(telegramId);
+
+        if (state?.type !== 'awaiting_budget_plan_date_confirm' || !state.data?.startDate || !state.data?.endDate) {
+          await bot.sendMessage(chatId, "Sana tasdiqlash eskirgan. Sana oralig'ini qayta yozing.", getBudgetPlanCancelMarkup(telegramId));
+          setUserState(telegramId, 'awaiting_budget_plan_dates');
+          return;
+        }
+
+        await askBudgetPlanItems(bot, chatId, telegramId, state.data);
+        return;
+      }
+
       if (!hasFullName(user)) {
         await promptForMissingName(bot, chatId, telegramId);
         return;
@@ -2582,6 +2687,15 @@ async function handleMessage(bot, msg) {
         return;
       }
 
+      if (state.type === 'awaiting_budget_plan_date_confirm') {
+        await bot.sendMessage(
+          chatId,
+          buildBudgetPlanDateConfirmText(state.data),
+          getBudgetPlanDateConfirmMarkup(telegramId)
+        );
+        return;
+      }
+
       if (state.type === 'awaiting_budget_plan_items') {
         await bot.sendMessage(
           chatId,
@@ -2629,6 +2743,15 @@ async function handleMessage(bot, msg) {
 
     if (state?.type === 'awaiting_budget_plan_dates') {
       await handleBudgetPlanDateInput(bot, chatId, telegramId, normalizedText);
+      return;
+    }
+
+    if (state?.type === 'awaiting_budget_plan_date_confirm') {
+      await bot.sendMessage(
+        chatId,
+        buildBudgetPlanDateConfirmText(state.data),
+        getBudgetPlanDateConfirmMarkup(telegramId)
+      );
       return;
     }
 

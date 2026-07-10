@@ -88,7 +88,7 @@ const CATEGORY_KEYWORDS = [
   },
   {
     category: 'Oziq-ovqat',
-    keywords: ['non', 'nonga', 'ovqat', 'osh', 'somsa', 'lavash', 'market', 'supermarket', 'meva', 'sabzavot', 'choy', 'qahva', 'ichimlik']
+    keywords: ['non', 'nonga', 'ovqat', 'osh', 'somsa', 'lavash', 'market', 'supermarket', 'meva', 'sabzavot', 'choy', 'qahva', 'ichimlik', 'yeb', 'ichar', 'yeb-ichar']
   },
   {
     category: 'Kommunal',
