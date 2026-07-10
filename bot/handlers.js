@@ -82,6 +82,9 @@ const EXPENSE_DELETE_CANCEL_PREFIX = 'excn_';
 const PLAN_GOAL_CANCEL_CALLBACK = 'plan_goal_cancel';
 const PLAN_GOAL_LIMIT_COST = 15;
 const AMOUNT_PARSE_ERROR_TEXT = "Summani tushunmadim. Masalan: 15000, 15 ming, yoki 1.5 mln kabi yozing.";
+const EXPENSE_TEXT_MAX_LENGTH = 200;
+const BUDGET_PLAN_TEXT_MIN_LENGTH = 10;
+const BUDGET_PLAN_TEXT_MAX_LENGTH = 2000;
 const rateBuckets = new Map();
 const userStates = new Map();
 const consumedCallbackMessages = new Map();
@@ -97,6 +100,40 @@ function getChatId(msg) {
 
 function getTelegramId(from) {
   return userService.normalizeTelegramId(from.id);
+}
+
+function validateExpenseText(text) {
+  const cleanText = String(text || '').trim();
+
+  if (!cleanText || cleanText.length > EXPENSE_TEXT_MAX_LENGTH) {
+    return {
+      ok: false,
+      text: cleanText,
+      message: `Xarajat yoki kirim matni 1 dan ${EXPENSE_TEXT_MAX_LENGTH} belgigacha bo'lishi kerak.`
+    };
+  }
+
+  return {
+    ok: true,
+    text: cleanText
+  };
+}
+
+function validateBudgetPlanText(text) {
+  const cleanText = String(text || '').trim();
+
+  if (cleanText.length < BUDGET_PLAN_TEXT_MIN_LENGTH || cleanText.length > BUDGET_PLAN_TEXT_MAX_LENGTH) {
+    return {
+      ok: false,
+      text: cleanText,
+      message: `Reja matni ${BUDGET_PLAN_TEXT_MIN_LENGTH} dan ${BUDGET_PLAN_TEXT_MAX_LENGTH} belgigacha bo'lishi kerak.`
+    };
+  }
+
+  return {
+    ok: true,
+    text: cleanText
+  };
 }
 
 function cleanupConsumedCallbacks() {
@@ -1600,12 +1637,13 @@ async function handleBudgetPlanDateInput(bot, chatId, telegramId, text) {
 }
 
 async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateData, text) {
-  const planText = String(text || '').trim();
+  const validation = validateBudgetPlanText(text);
+  const planText = validation.text;
 
-  if (!planText || planText.length > 800) {
+  if (!validation.ok) {
     await bot.sendMessage(
       chatId,
-      "Reja matni 1 dan 800 belgigacha bo'lishi kerak.",
+      validation.message,
       getBudgetPlanCancelMarkup(telegramId)
     );
     return;
@@ -1622,7 +1660,9 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
   try {
     console.log('[BUDGET_PLAN_DEBUG] Starting categorizeExpense with text:', planText.substring(0, 100));
     
-    const parsedTransactions = await categorizeExpense(planText);
+    const parsedTransactions = await categorizeExpense(planText, {
+      maxLength: BUDGET_PLAN_TEXT_MAX_LENGTH
+    });
     console.log('[BUDGET_PLAN_DEBUG] categorizeExpense returned:', {
       count: Array.isArray(parsedTransactions) ? parsedTransactions.length : 1,
       type: typeof parsedTransactions,
@@ -1945,15 +1985,16 @@ async function handleStatsCommand(bot, msg) {
 }
 
 async function handleExpenseText(bot, chatId, user, text) {
-  const cleanText = String(text || '').trim();
+  const validation = validateExpenseText(text);
+  const cleanText = validation.text;
 
-  if (!cleanText || cleanText.length > 200) {
+  if (!validation.ok) {
     console.log('[EXPENSE_DEBUG] Text rejected (length check):', {
       textLength: cleanText.length,
-      maxLength: 200,
+      maxLength: EXPENSE_TEXT_MAX_LENGTH,
       message: "Should have been caught by budget plan handler if state was set"
     });
-    await bot.sendMessage(chatId, "Xarajat yoki kirim matni 1 dan 200 belgigacha bo'lishi kerak.", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, validation.message, MAIN_KEYBOARD);
     return;
   }
 

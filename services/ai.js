@@ -413,8 +413,14 @@ function inferCategory(text) {
   return matched?.category || 'Boshqa';
 }
 
-function parseExpenseLocally(text) {
-  const cleanText = compactInput(text, 200);
+function getCategorizeMaxLength(options = {}) {
+  const maxLength = Number(options.maxLength);
+
+  return Number.isInteger(maxLength) && maxLength > 0 ? maxLength : 200;
+}
+
+function parseExpenseLocally(text, options = {}) {
+  const cleanText = compactInput(text, getCategorizeMaxLength(options));
   const amountMatch = cleanText.match(SIGNED_AMOUNT_PATTERN);
 
   if (!amountMatch) {
@@ -438,8 +444,8 @@ function parseExpenseLocally(text) {
   };
 }
 
-function parseExpensesLocally(text) {
-  const cleanText = compactInput(text, 200);
+function parseExpensesLocally(text, options = {}) {
+  const cleanText = compactInput(text, getCategorizeMaxLength(options));
   const amountMatches = [...cleanText.matchAll(new RegExp(SIGNED_AMOUNT_PATTERN.source, 'gi'))];
 
   if (!amountMatches.length) {
@@ -895,8 +901,9 @@ function generateLocalAdvice(userData) {
   return buildAdviceText(metrics, buildAdviceSentence(metrics));
 }
 
-async function categorizeExpense(text) {
-  const cleanText = compactInput(text, 200);
+async function categorizeExpense(text, options = {}) {
+  const maxLength = getCategorizeMaxLength(options);
+  const cleanText = compactInput(text, maxLength);
 
   // DEBUG: Input text kesib qolyaptimi tekshirish
   if (isAiDebugEnabled()) {
@@ -913,7 +920,7 @@ async function categorizeExpense(text) {
     throw new Error("Operatsiya matni bo'sh bo'lmasligi kerak.");
   }
 
-  const localFallback = parseExpensesLocally(cleanText);
+  const localFallback = parseExpensesLocally(cleanText, { maxLength });
   
   function buildCategorizePrompt(inputText, simplify = false) {
     return [
