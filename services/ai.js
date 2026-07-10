@@ -903,32 +903,41 @@ async function categorizeExpense(text) {
   }
 
   const localFallback = parseExpensesLocally(cleanText);
-  const prompt = [
-    "Quyidagi matnda bitta yoki bir nechta moliyaviy operatsiya bo'lishi mumkin.",
-    "Har bir operatsiyani alohida summa, type, kategoriya va izoh sifatida JSON massiv qilib qaytar.",
-    "Ajratuvchilar '+', ',', ';', 'va', yangi qator yoki oddiy bo'shliq bo'lishi mumkin.",
-    "Matndan bu xarajat (chiqim) yoki daromad (kirim) ekanini aniqla.",
-    '',
-    "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', '+' belgisi bilan boshlangan summa, 'kirim', 'daromad' so'zlari.",
-    '',
-    "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
-    '',
-    "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila (kirim uchun boshqa kategoriyalar kerak emas, hammasi 'Kirim' deb belgilansin). Agar CHIQIM bo'lsa, type='expense' va mavjud kategoriyalar ro'yxatidan birini tanla.",
-    `Chiqim kategoriyalari faqat shu ro'yxatdan bo'lsin: ${CATEGORIES.join(', ')}.`,
-    "Kommunal faqat svet, gaz, suv, internet uchun; kvartira ijarasi yoki uy to'lovi Kommunal emas, Uy-joy.",
-    "Boshqa kategoriyasini faqat aniq hech qaysi toifaga kirmagan holatda ishlat.",
-    "Kategoriyalarni to'g'ri tanlash uchun misollar:",
-    "- 'kvartira uchun', 'ijaraga', 'uy to'lovi' -> Uy-joy",
-    "- 'svet', 'gaz', 'internet', 'suv' -> Kommunal",
-    "- 'telefon sotib oldim', 'noutbuk', 'maishiy texnika' -> Texnika",
-    "- 'dadamga', 'onamga', 'ukamga berdim', 'ota-onamga' -> Oilaviy yordam",
-    "- 'kredit to'lovi', 'bo'lib to'lash', 'oylik to'lov' -> Bo'lib to'lash",
-    "- 'o'qish', 'kurs', 'repetitor', 'kitob' -> Ta'lim",
-    "Faqat JSON massiv qaytar, boshqa hech narsa yozma.",
-    'JSON formati aniq shunday bolsin: [{"amount":25000,"type":"expense","category":"Oziq-ovqat","note":"nonga"},{"amount":50000,"type":"income","category":"Kirim","note":"qarz qaytdi"}].',
-    'Masalan, "20000 non, +50000 qarz qaytdi" uchun [{"amount":20000,"type":"expense","category":"Oziq-ovqat","note":"non"},{"amount":50000,"type":"income","category":"Kirim","note":"qarz qaytdi"}] qaytar.',
-    `Matn: "${cleanText.replace(/"/g, '\\"')}"`
-  ].join('\n');
+  
+  function buildCategorizePrompt(inputText, simplify = false) {
+    return [
+      "Quyidagi matnda bitta yoki bir nechta moliyaviy operatsiya bo'lishi mumkin.",
+      "Har bir operatsiyani alohida summa, type, kategoriya va izoh sifatida JSON massiv qilib qaytar.",
+      "Ajratuvchilar '+', ',', ';', 'va', yangi qator yoki oddiy bo'shliq bo'lishi mumkin.",
+      "Matndan bu xarajat (chiqim) yoki daromad (kirim) ekanini aniqla.",
+      '',
+      "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', '+' belgisi bilan boshlangan summa, 'kirim', 'daromad' so'zlari.",
+      '',
+      "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
+      '',
+      "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila (kirim uchun boshqa kategoriyalar kerak emas, hammasi 'Kirim' deb belgilansin). Agar CHIQIM bo'lsa, type='expense' va mavjud kategoriyalar ro'yxatidan birini tanla.",
+      `Chiqim kategoriyalari faqat shu ro'yxatdan bo'lsin: ${CATEGORIES.join(', ')}.`,
+      "Kommunal faqat svet, gaz, suv, internet uchun; kvartira ijarasi yoki uy to'lovi Kommunal emas, Uy-joy.",
+      "Boshqa kategoriyasini faqat aniq hech qaysi toifaga kirmagan holatda ishlat.",
+      "Kategoriyalarni to'g'ri tanlash uchun misollar:",
+      "- 'kvartira uchun', 'ijaraga', 'uy to'lovi' -> Uy-joy",
+      "- 'svet', 'gaz', 'internet', 'suv' -> Kommunal",
+      "- 'telefon sotib oldim', 'noutbuk', 'maishiy texnika' -> Texnika",
+      "- 'dadamga', 'onamga', 'ukamga berdim', 'ota-onamga' -> Oilaviy yordam",
+      "- 'kredit to'lovi', 'bo'lib to'lash', 'oylik to'lov' -> Bo'lib to'lash",
+      "- 'o'qish', 'kurs', 'repetitor', 'kitob' -> Ta'lim",
+      "MUHIM: Summalar turli formatda bo'lishi mumkin: 15000, 15 ming, 1.5 mln, 15k, yoki 15 so'm.",
+      "Masallar: '532000 o'qish', '466 ming payme', '750000 kvartira', '350 ming dadam', '1.5 mln avtomobil', '500k non'",
+      "Faqat JSON massiv qaytar, boshqa hech narsa yozma.",
+      'JSON formati aniq shunday bolsin: [{"amount":25000,"type":"expense","category":"Oziq-ovqat","note":"nonga"},{"amount":50000,"type":"income","category":"Kirim","note":"qarz qaytdi"}].',
+      simplify
+        ? 'Ko\'p bandli matnda har bir bandni alohida massiv elementiga aylantirib qaytar. Hech qanday markdown yoki izoh, faqat JSON.'
+        : 'Masalan, "20000 non, 466 ming payme, 750000 kvartira" uchun [{"amount":20000,"type":"expense","category":"Oziq-ovqat","note":"non"},{"amount":466000,"type":"expense","category":"Bo\'lib to\'lash","note":"payme"},{"amount":750000,"type":"expense","category":"Uy-joy","note":"kvartira"}] qaytar.',
+      `Matn: "${inputText.replace(/"/g, '\\"')}"`
+    ].join('\n');
+  }
+
+  const prompt = buildCategorizePrompt(cleanText);
 
   debugAi('categorizeExpense.model', getConfiguredModelName());
   debugAi('categorizeExpense.input', cleanText);
@@ -966,15 +975,49 @@ async function categorizeExpense(text) {
   try {
     const parsed = JSON.parse(extractJson(rawText));
     return normalizeExpenseListPayload(parsed, cleanText);
-  } catch (error) {
-    if (localFallback) {
-      debugAi('categorizeExpense.localFallback', localFallback);
-      return localFallback;
-    }
+  } catch (parseError) {
+    debugAi('categorizeExpense.jsonParseError', {
+      rawText: rawText.slice(0, 500),
+      error: parseError.message
+    });
 
-    const parseError = new Error('AI_JSON_PARSE_FAILED');
-    parseError.cause = error;
-    throw parseError;
+    // JSON parse xatosi bo'lganda, qayta urinish mekanizmini ishga tushir
+    try {
+      debugAi('categorizeExpense.retryAttempt', 'simplified prompt with retry');
+      
+      const simplifiedPrompt = buildCategorizePrompt(cleanText, true);
+      const retryResult = await callGeminiWithRetry('categorizeExpense_retry', () => 
+        getGeminiModel().generateContent({
+          contents: [{ role: 'user', parts: [{ text: simplifiedPrompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json'
+          }
+        })
+      );
+
+      await logApiUsageSafely();
+      const retryRawText = retryResult.response.text();
+      debugAi('categorizeExpense.retryResponse', retryRawText);
+      
+      const retryParsed = JSON.parse(extractJson(retryRawText));
+      return normalizeExpenseListPayload(retryParsed, cleanText);
+    } catch (retryError) {
+      debugAi('categorizeExpense.retryFailed', {
+        error: retryError.message
+      });
+
+      if (localFallback) {
+        debugAi('categorizeExpense.usingLocalFallback', localFallback);
+        return localFallback;
+      }
+
+      // Agar localFallback ham bo'sh bo'lsa, aniq xato beryapti
+      const error = new Error('AI_CATEGORIZATION_FAILED');
+      error.code = 'AI_CATEGORIZATION_FAILED';
+      error.userMessage = "Rejani tushunolmadim. Iltimos, har bir bandni alohida qatorda yozing. Masalan:\n- 532000 o'qish\n- 466 ming payme\n- 750000 kvartira";
+      throw error;
+    }
   }
 }
 

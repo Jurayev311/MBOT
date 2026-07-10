@@ -1658,9 +1658,18 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
       return;
     }
 
+    if (error.code === 'AI_CATEGORIZATION_FAILED') {
+      await bot.sendMessage(
+        chatId,
+        error.userMessage,
+        getBudgetPlanCancelMarkup(telegramId)
+      );
+      return;
+    }
+
     await bot.sendMessage(
       chatId,
-      "Rejani tushunmadim. Masalan: Oziq-ovqat 800000, Transport 300000",
+      "Rejani tushunmadim. Iltimos, har bir bandni alohida qatorda yozing. Masalan:\n- Oziq-ovqat 800000\n- Transport 300000\n- Kommunal 150000",
       getBudgetPlanCancelMarkup(telegramId)
     );
   }
