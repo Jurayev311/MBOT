@@ -57,6 +57,7 @@ const DEFAULT_GEMINI_MODEL = 'gemini-3.1-flash-lite';
 const AI_BUSY_MESSAGE = "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.";
 const AI_ANALYSIS_UNAVAILABLE_MESSAGE = "Hozir tahlil qila olmadim, birozdan keyin qayta urinib ko'ring";
 const PLAN_GOAL_UNAVAILABLE_MESSAGE = "Hozir reja tahlilini qila olmadim, birozdan keyin qayta urinib ko'ring.";
+const DEFAULT_CATEGORIZE_MAX_LENGTH = 4000;
 const GEMINI_MIN_INTERVAL_MS = 300;
 const GEMINI_RETRY_DELAY_MS = 2000;
 const AMOUNT_PATTERN_SOURCE = "\\+?\\b\\d+(?:[\\s.,]\\d+)*(?:\\s*(?:ming(?:\\s+so['’`ʻ]?m)?|k|mln|million|m)\\b)?";
@@ -490,7 +491,7 @@ function inferCategory(text) {
 function getCategorizeMaxLength(options = {}) {
   const maxLength = Number(options.maxLength);
 
-  return Number.isInteger(maxLength) && maxLength > 0 ? maxLength : 200;
+  return Number.isInteger(maxLength) && maxLength > 0 ? maxLength : DEFAULT_CATEGORIZE_MAX_LENGTH;
 }
 
 function parseExpenseLocally(text, options = {}) {

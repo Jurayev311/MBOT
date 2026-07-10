@@ -88,7 +88,6 @@ const EXPENSE_DELETE_CANCEL_PREFIX = 'excn_';
 const PLAN_GOAL_CANCEL_CALLBACK = 'plan_goal_cancel';
 const PLAN_GOAL_LIMIT_COST = 15;
 const AMOUNT_PARSE_ERROR_TEXT = "Summani tushunmadim. Masalan: 15000, 15 ming, yoki 1.5 mln kabi yozing.";
-const EXPENSE_TEXT_MAX_LENGTH = 200;
 const BUDGET_PLAN_TEXT_MIN_LENGTH = 10;
 const BUDGET_PLAN_TEXT_MAX_LENGTH = 4000;
 const rateBuckets = new Map();
@@ -111,11 +110,11 @@ function getTelegramId(from) {
 function validateExpenseText(text) {
   const cleanText = String(text || '').trim();
 
-  if (!cleanText || cleanText.length > EXPENSE_TEXT_MAX_LENGTH) {
+  if (!cleanText) {
     return {
       ok: false,
       text: cleanText,
-      message: `Xarajat yoki kirim matni 1 dan ${EXPENSE_TEXT_MAX_LENGTH} belgigacha bo'lishi kerak.`
+      message: "Xarajat yoki kirim matni bo'sh bo'lmasligi kerak."
     };
   }
 
@@ -2018,11 +2017,6 @@ async function handleExpenseText(bot, chatId, user, text) {
   const cleanText = validation.text;
 
   if (!validation.ok) {
-    console.log('[EXPENSE_DEBUG] Text rejected (length check):', {
-      textLength: cleanText.length,
-      maxLength: EXPENSE_TEXT_MAX_LENGTH,
-      message: "Should have been caught by budget plan handler if state was set"
-    });
     await bot.sendMessage(chatId, validation.message, MAIN_KEYBOARD);
     return;
   }
