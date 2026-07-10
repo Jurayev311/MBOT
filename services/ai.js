@@ -2,6 +2,7 @@ require('dotenv').config({ quiet: true });
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const apiUsageService = require('./apiUsageService');
+const { parseAmount } = require('../utils/parseAmount');
 
 const CATEGORIES = [
   'Oziq-ovqat',
@@ -36,7 +37,8 @@ const AI_ANALYSIS_UNAVAILABLE_MESSAGE = "Hozir tahlil qila olmadim, birozdan key
 const PLAN_GOAL_UNAVAILABLE_MESSAGE = "Hozir reja tahlilini qila olmadim, birozdan keyin qayta urinib ko'ring.";
 const GEMINI_MIN_INTERVAL_MS = 300;
 const GEMINI_RETRY_DELAY_MS = 2000;
-const SIGNED_AMOUNT_PATTERN = /\+?\b\d{1,3}(?:[ .]\d{3})+(?:[,.]\d+)?\b|\+?\b\d+(?:[,.]\d+)?\b/;
+const AMOUNT_PATTERN_SOURCE = "\\+?\\b\\d+(?:[\\s.,]\\d+)*(?:\\s*(?:ming(?:\\s+so['’`ʻ]?m)?|k|mln|million|m)\\b)?";
+const SIGNED_AMOUNT_PATTERN = new RegExp(AMOUNT_PATTERN_SOURCE, 'i');
 const INCOME_KEYWORDS = [
   'qarzimni qaytardi',
   'qarzim qaytdi',
@@ -306,27 +308,7 @@ function extractJson(rawText) {
 }
 
 function toPositiveNumber(value) {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value > 0 ? value : null;
-  }
-
-  const raw = String(value || '').trim();
-  const cleaned = raw
-    .replace(/[^\d.,]/g, '');
-
-  if (!cleaned) {
-    return null;
-  }
-
-  const noSpaces = raw.replace(/\s+/g, '');
-  const normalized = /^\d{1,3}([., ]\d{3})+$/.test(raw)
-    ? raw.replace(/[., ]/g, '')
-    : cleaned.includes(',') && !cleaned.includes('.') && !/^\d{1,3}(,\d{3})+$/.test(noSpaces)
-      ? cleaned.replace(',', '.')
-      : cleaned.replace(/,/g, '');
-
-  const amount = Number(normalized);
-  return Number.isFinite(amount) && amount > 0 ? amount : null;
+  return parseAmount(value);
 }
 
 function normalizeCategoryKey(value) {
@@ -458,7 +440,7 @@ function parseExpenseLocally(text) {
 
 function parseExpensesLocally(text) {
   const cleanText = compactInput(text, 200);
-  const amountMatches = [...cleanText.matchAll(new RegExp(SIGNED_AMOUNT_PATTERN.source, 'g'))];
+  const amountMatches = [...cleanText.matchAll(new RegExp(SIGNED_AMOUNT_PATTERN.source, 'gi'))];
 
   if (!amountMatches.length) {
     return null;

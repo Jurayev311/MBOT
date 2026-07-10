@@ -1,5 +1,6 @@
 const { supabase } = require('../config/db');
 const { CATEGORIES } = require('./ai');
+const { parseAmount } = require('../utils/parseAmount');
 
 const PLAN_SELECT_COLUMNS = 'id, user_id, start_date, end_date, is_active, created_at';
 const ITEM_SELECT_COLUMNS = 'id, budget_plan_id, category, planned_amount';
@@ -187,9 +188,9 @@ function normalizePlanItems(items = []) {
   const byCategory = new Map();
 
   for (const item of items) {
-    const amount = Number(item?.planned_amount ?? item?.amount ?? 0);
+    const amount = parseAmount(item?.planned_amount ?? item?.amount ?? 0);
 
-    if (!Number.isFinite(amount) || amount <= 0) {
+    if (!amount) {
       continue;
     }
 
@@ -348,9 +349,9 @@ async function updateBudgetPlanDates(userId, planId, { startDate, endDate }) {
 }
 
 async function updateBudgetPlanItem(userId, itemId, plannedAmount) {
-  const amount = Number(plannedAmount);
+  const amount = parseAmount(plannedAmount);
 
-  if (!Number.isFinite(amount) || amount <= 0) {
+  if (!amount) {
     throw new Error("Reja summasi musbat raqam bo'lishi kerak.");
   }
 

@@ -2,6 +2,7 @@ const { supabase } = require('../config/db');
 const budgetPlanService = require('./budgetPlanService');
 const { CATEGORIES } = require('./ai');
 const { getMonthKey } = require('./userService');
+const { parseAmount } = require('../utils/parseAmount');
 
 const EXPENSE_SELECT_COLUMNS = 'id, user_id, amount, category, type, note, month, input_type, created_at';
 const INCOME_CATEGORY = 'Kirim';
@@ -80,9 +81,9 @@ function normalizeTransactionType(type, category) {
 }
 
 function validateExpense({ amount, category, note, type }) {
-  const normalizedAmount = Number(amount);
+  const normalizedAmount = parseAmount(amount);
 
-  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+  if (!normalizedAmount) {
     throw new Error("Operatsiya summasi musbat raqam bo'lishi kerak.");
   }
 
@@ -105,9 +106,9 @@ function validateExpense({ amount, category, note, type }) {
 }
 
 function assertPositiveAmount(amount) {
-  const normalizedAmount = Number(amount);
+  const normalizedAmount = parseAmount(amount);
 
-  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+  if (!normalizedAmount) {
     throw new Error("Operatsiya summasi musbat raqam bo'lishi kerak.");
   }
 

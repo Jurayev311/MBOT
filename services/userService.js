@@ -1,4 +1,5 @@
 const { supabase } = require('../config/db');
+const { parseAmount } = require('../utils/parseAmount');
 
 function getMonthKey(date = new Date()) {
   // Oy kaliti server timezone'iga bog'lanib qolmasligi uchun sozlanadigan timezone ishlatiladi.
@@ -143,9 +144,9 @@ async function ensureUser(from) {
 }
 
 function assertPositiveAmount(amount) {
-  const normalized = Number(amount);
+  const normalized = parseAmount(amount);
 
-  if (!Number.isFinite(normalized) || normalized <= 0) {
+  if (!normalized) {
     throw new Error("Summa musbat raqam bo'lishi kerak.");
   }
 

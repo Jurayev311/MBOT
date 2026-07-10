@@ -6,6 +6,7 @@ const budgetPlanService = require('../services/budgetPlanService');
 const expenseService = require('../services/expenseService');
 const userService = require('../services/userService');
 const { rolloverUserMonth } = require('../jobs/monthCheck');
+const { parseAmount } = require('../utils/parseAmount');
 
 const MAIN_KEYBOARD = {
   reply_markup: {
@@ -80,6 +81,7 @@ const EXPENSE_DELETE_CONFIRM_PREFIX = 'exok_';
 const EXPENSE_DELETE_CANCEL_PREFIX = 'excn_';
 const PLAN_GOAL_CANCEL_CALLBACK = 'plan_goal_cancel';
 const PLAN_GOAL_LIMIT_COST = 15;
+const AMOUNT_PARSE_ERROR_TEXT = "Summani tushunmadim. Masalan: 15000, 15 ming, yoki 1.5 mln kabi yozing.";
 const rateBuckets = new Map();
 const userStates = new Map();
 const consumedCallbackMessages = new Map();
@@ -552,22 +554,7 @@ function isRateLimited(telegramId) {
 }
 
 function parsePositiveAmount(text) {
-  // Maosh kiritishda "2 500 000" yoki "2500000" kabi formatlar qabul qilinadi.
-  const raw = String(text || '').trim();
-
-  if (/^\d{1,3}([ .]\d{3})+$/.test(raw)) {
-    const groupedAmount = Number(raw.replace(/[ .]/g, ''));
-    return groupedAmount > 0 ? groupedAmount : null;
-  }
-
-  const compact = raw.replace(/\s+/g, '');
-
-  if (!/^\d+([.,]\d+)?$/.test(compact)) {
-    return null;
-  }
-
-  const amount = Number(compact.replace(',', '.'));
-  return Number.isFinite(amount) && amount > 0 ? amount : null;
+  return parseAmount(text);
 }
 
 function isPlanGoalButtonText(text) {
@@ -1503,7 +1490,7 @@ async function handlePlanGoalIncomeInput(bot, chatId, telegramId, user, text) {
   const income = parsePositiveAmount(text);
 
   if (!income) {
-    await bot.sendMessage(chatId, "Daromadni faqat musbat raqam shaklida yozing. Masalan: 5000000", getPlanGoalCancelMarkup());
+    await bot.sendMessage(chatId, AMOUNT_PARSE_ERROR_TEXT, getPlanGoalCancelMarkup());
     return;
   }
 
@@ -1746,7 +1733,7 @@ async function handleBudgetPlanItemAmountInput(bot, chatId, telegramId, user, st
   const newAmount = parsePositiveAmount(text);
 
   if (!newAmount) {
-    await bot.sendMessage(chatId, "Summani musbat raqam shaklida yozing. Masalan: 800000", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, AMOUNT_PARSE_ERROR_TEXT, MAIN_KEYBOARD);
     return;
   }
 
@@ -1784,7 +1771,7 @@ async function handleSalaryInput(bot, chatId, telegramId, user, text, options = 
   const amount = parsePositiveAmount(text);
 
   if (!amount) {
-    await bot.sendMessage(chatId, "Maoshni faqat musbat raqam shaklida yozing. Masalan: 5000000", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, AMOUNT_PARSE_ERROR_TEXT, MAIN_KEYBOARD);
     return null;
   }
 
@@ -2613,7 +2600,7 @@ async function handleExpenseEditAmountInput(bot, chatId, telegramId, user, state
   const newAmount = parsePositiveAmount(text);
 
   if (!newAmount) {
-    await bot.sendMessage(chatId, "Yangi summani musbat raqam shaklida yozing. Masalan: 53200", MAIN_KEYBOARD);
+    await bot.sendMessage(chatId, AMOUNT_PARSE_ERROR_TEXT, MAIN_KEYBOARD);
     return;
   }
 
