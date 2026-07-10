@@ -566,29 +566,33 @@ function isPlanGoalButtonText(text) {
 }
 
 function normalizeKeyboardText(text) {
-  return String(text || '').replace(/\uFE0F/g, '').trim();
+  return String(text || '')
+    .replace(/\uFE0F/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 function getMainKeyboardAction(text) {
   const normalizedText = normalizeKeyboardText(text);
 
-  if (normalizedText === '📊 Hisobot') {
+  if (normalizedText.includes('hisobot')) {
     return 'report';
   }
 
-  if (normalizedText === '💰 Maosh') {
+  if (normalizedText.includes('maosh')) {
     return 'salary';
   }
 
-  if (normalizedText === '🤖 AI Tahlil') {
+  if (normalizedText.includes('ai tahlil')) {
     return 'analysis';
   }
 
-  if (normalizedText === '⚙️ Sozlamalar') {
+  if (normalizedText.includes('sozlamalar')) {
     return 'settings';
   }
 
-  if (normalizedText === BUDGET_PLAN_BUTTON_TEXT || normalizedText.toLowerCase().includes('rejam')) {
+  if (normalizedText === normalizeKeyboardText(BUDGET_PLAN_BUTTON_TEXT) || normalizedText.includes('rejam')) {
     return 'budgetPlan';
   }
 
@@ -2381,7 +2385,9 @@ async function handleCallback(bot, query) {
       return;
     }
 
-    if (isCallbackMessageConsumed(callbackKey)) {
+    const budgetPlanCallback = parseBudgetPlanCallback(query.data);
+
+    if (isCallbackMessageConsumed(callbackKey) && budgetPlanCallback?.action !== 'cancel') {
       await answerCallback(bot, query, "Bu so'rov allaqachon bajarilgan");
       return;
     }
@@ -2408,8 +2414,6 @@ async function handleCallback(bot, query) {
       return;
     }
 
-    const budgetPlanCallback = parseBudgetPlanCallback(query.data);
-
     if (budgetPlanCallback) {
       if (String(budgetPlanCallback.telegramId) !== telegramId) {
         await answerCallback(bot, query, 'Bu tugma siz uchun emas.');
@@ -2418,7 +2422,6 @@ async function handleCallback(bot, query) {
 
       await answerCallback(bot, query);
       await consumeCallbackMessage(bot, query, callbackKey);
-      const user = await userService.ensureUser(query.from);
 
       if (budgetPlanCallback.action === 'cancel') {
         clearUserState(telegramId);
@@ -2451,6 +2454,8 @@ async function handleCallback(bot, query) {
         return;
       }
 
+      const user = await userService.ensureUser(query.from);
+
       if (!hasFullName(user)) {
         await promptForMissingName(bot, chatId, telegramId);
         return;
@@ -2467,19 +2472,33 @@ async function handleCallback(bot, query) {
 
     await answerCallback(bot, query);
 
+    if (query.data === PLAN_GOAL_CANCEL_CALLBACK) {
+      await consumeCallbackMessage(bot, query, callbackKey);
+      clearUserState(telegramId);
+      await bot.sendMessage(chatId, 'Bekor qilindi.', MAIN_KEYBOARD);
+      return;
+    }
+
+    if (query.data === 'settings_clear_cancel') {
+      await consumeCallbackMessage(bot, query, callbackKey);
+      clearUserState(telegramId);
+      await bot.sendMessage(chatId, "Tozalash bekor qilindi.", MAIN_KEYBOARD);
+      return;
+    }
+
+    if (query.data === 'month_salary_keep') {
+      await consumeCallbackMessage(bot, query, callbackKey);
+      clearUserState(telegramId);
+      await bot.sendMessage(chatId, "Mayli, bu oyda ham avvalgi maosh bilan davom etamiz.", MAIN_KEYBOARD);
+      return;
+    }
+
     const user = await userService.ensureUser(query.from);
 
     if (query.data === PAYMENT_START_CALLBACK) {
       await consumeCallbackMessage(bot, query, callbackKey);
       await userService.updateAwaitingPayment(user.id, true);
       await bot.sendMessage(chatId, "Chek yoki to'lov skrinshotini shu yerga yuboring.", MAIN_KEYBOARD);
-      return;
-    }
-
-    if (query.data === PLAN_GOAL_CANCEL_CALLBACK) {
-      await consumeCallbackMessage(bot, query, callbackKey);
-      clearUserState(telegramId);
-      await bot.sendMessage(chatId, 'Bekor qilindi.', MAIN_KEYBOARD);
       return;
     }
 
@@ -2512,20 +2531,6 @@ async function handleCallback(bot, query) {
       clearUserState(telegramId);
       setUserState(telegramId, 'awaiting_salary');
       await bot.sendMessage(chatId, "Ma'lumotlaringiz tozalandi. Qaytadan oylik maoshingizni kiriting.", MAIN_KEYBOARD);
-      return;
-    }
-
-    if (query.data === 'settings_clear_cancel') {
-      await consumeCallbackMessage(bot, query, callbackKey);
-      clearUserState(telegramId);
-      await bot.sendMessage(chatId, "Tozalash bekor qilindi.", MAIN_KEYBOARD);
-      return;
-    }
-
-    if (query.data === 'month_salary_keep') {
-      await consumeCallbackMessage(bot, query, callbackKey);
-      clearUserState(telegramId);
-      await bot.sendMessage(chatId, "Mayli, bu oyda ham avvalgi maosh bilan davom etamiz.", MAIN_KEYBOARD);
       return;
     }
 
@@ -2692,6 +2697,7 @@ async function handleMessage(bot, msg) {
         return;
       }
 
+      // Boshqa tugmalar bosilsa state tozala va tugmani ishlat
       clearUserState(telegramId);
       await handleMainKeyboardButton(bot, chatId, telegramId, user, normalizedText);
       return;
