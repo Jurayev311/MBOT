@@ -1,4 +1,5 @@
 const { supabase } = require('../config/db');
+const budgetPlanService = require('./budgetPlanService');
 const { CATEGORIES } = require('./ai');
 const { getMonthKey } = require('./userService');
 
@@ -279,8 +280,14 @@ async function getMonthlyHistory(userId, limit = 6) {
 
 async function getAdviceData(user) {
   const month = user.current_month || getMonthKey();
-  const currentSummary = await getMonthlySummary(user.id, month);
-  const previousMonths = await getMonthlyHistory(user.id, 6);
+  const [currentSummary, previousMonths, activeBudgetPlan] = await Promise.all([
+    getMonthlySummary(user.id, month),
+    getMonthlyHistory(user.id, 6),
+    budgetPlanService.getActiveBudgetPlan(user.id, new Date())
+  ]);
+  const budgetPlanProgress = activeBudgetPlan
+    ? await budgetPlanService.getBudgetPlanProgress(user.id, activeBudgetPlan)
+    : null;
   const salary = Number(user.current_salary || 0);
 
   return {
@@ -298,7 +305,21 @@ async function getAdviceData(user) {
       netSpent: currentSummary.netSpent,
       balance: salary - currentSummary.netSpent,
       byCategory: currentSummary.byCategory,
-      expensesCount: currentSummary.expenses.length
+      expensesCount: currentSummary.expenses.length,
+      budgetPlan: budgetPlanProgress
+        ? {
+          startDate: budgetPlanProgress.plan.start_date,
+          endDate: budgetPlanProgress.plan.end_date,
+          totalPlanned: budgetPlanProgress.totalPlanned,
+          totalSpent: budgetPlanProgress.totalSpent,
+          items: budgetPlanProgress.items.map((item) => ({
+            category: item.category,
+            plannedAmount: item.plannedAmount,
+            spent: item.spent,
+            overAmount: item.overAmount
+          }))
+        }
+        : null
     },
     previousMonths
   };

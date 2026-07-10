@@ -603,6 +603,16 @@ function buildCategoryBreakdown(byCategory = {}, totalSpent = 0) {
   });
 }
 
+function formatBudgetPlanDate(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return String(value || '');
+  }
+
+  return `${match[3]}.${match[2]}.${match[1]}`;
+}
+
 function formatCategoryBreakdownList(items) {
   const positiveItems = items.filter((item) => item.amount > 0);
 
@@ -612,6 +622,43 @@ function formatCategoryBreakdownList(items) {
 
   return positiveItems
     .map((item) => `${item.category}: ${formatMoney(item.amount)} (${item.percent}%)`)
+    .join('; ');
+}
+
+function normalizeBudgetPlanMetrics(budgetPlan) {
+  if (!budgetPlan || !Array.isArray(budgetPlan.items) || !budgetPlan.items.length) {
+    return null;
+  }
+
+  const items = budgetPlan.items.map((item) => ({
+    category: item.category,
+    plannedAmount: Math.round(Number(item.plannedAmount || 0)),
+    spent: Math.round(Number(item.spent || 0)),
+    overAmount: Math.round(Number(item.overAmount || 0))
+  }));
+
+  return {
+    startDate: budgetPlan.startDate,
+    endDate: budgetPlan.endDate,
+    totalPlanned: Math.round(Number(budgetPlan.totalPlanned || 0)),
+    totalSpent: Math.round(Number(budgetPlan.totalSpent || 0)),
+    items
+  };
+}
+
+function formatBudgetPlanBreakdown(budgetPlan) {
+  if (!budgetPlan) {
+    return null;
+  }
+
+  return budgetPlan.items
+    .map((item) => {
+      const status = item.overAmount > 0
+        ? `, ${formatMoney(item.overAmount)} oshgan`
+        : '';
+
+      return `${item.category}: ${formatMoney(item.spent)} / ${formatMoney(item.plannedAmount)}${status}`;
+    })
     .join('; ');
 }
 
@@ -695,6 +742,7 @@ function buildAdviceMetrics(userData) {
   const netSpent = Number.isFinite(Number(current.netSpent))
     ? Number(current.netSpent)
     : totalSpent - totalIncome;
+  const budgetPlan = normalizeBudgetPlanMetrics(current.budgetPlan);
   const byCategory = current.byCategory || {};
   const categoryBreakdown = buildCategoryBreakdown(byCategory, totalSpent);
   const fixedBreakdown = categoryBreakdown.filter((item) => item.type === 'fixed');
@@ -751,6 +799,7 @@ function buildAdviceMetrics(userData) {
         savings: adviceSavings
       }
       : null,
+    budgetPlan,
     byCategory
   };
 }
@@ -801,9 +850,22 @@ function buildAnalysisPrompt(metrics) {
   const categoryList = formatCategoryBreakdownList(metrics.categoryBreakdown);
   const fixedList = formatCategoryBreakdownList(metrics.fixedBreakdown);
   const flexibleList = formatCategoryBreakdownList(metrics.flexibleBreakdown);
+  const budgetPlanBreakdown = formatBudgetPlanBreakdown(metrics.budgetPlan);
   const adviceTarget = metrics.adviceCategory
     ? `${metrics.adviceCategory.name}: ${metrics.adviceCategory.reductionPercent}% kamaytirsa ~${formatMoney(metrics.adviceCategory.savings)} qoladi`
     : "moslashuvchan xarajat yo'q; aynan shu mazmunda yoz: Moslashuvchan xarajat yo'q, kamaytiradigan alohida joy ko'rinmayapti.";
+  const budgetPlanLines = metrics.budgetPlan
+    ? [
+      `- Faol byudjet reja: ${formatBudgetPlanDate(metrics.budgetPlan.startDate)} — ${formatBudgetPlanDate(metrics.budgetPlan.endDate)}`,
+      `- Reja jami: ${formatMoney(metrics.budgetPlan.totalPlanned)}, shu muddatda sarflandi: ${formatMoney(metrics.budgetPlan.totalSpent)}`,
+      `- Reja bo'yicha kategoriyalar: ${budgetPlanBreakdown}`
+    ]
+    : [];
+  const budgetPlanRules = metrics.budgetPlan
+    ? [
+      "8. Faol byudjet reja berilgan bo'lsa, tahlilda avvalo reja bilan solishtir: oshgan kategoriya bo'lsa aniq ayt, oshmagan bo'lsa reja ichida ekanini qisqa eslat."
+    ]
+    : [];
 
   return [
     "Sen moliyaviy yordamchisan. Quyidagi ma'lumotlar asosida foydalanuvchiga QISQA va ANIQ tahlil yoz.",
@@ -818,6 +880,7 @@ function buildAnalysisPrompt(metrics) {
     `- Kategoriyalar: ${categoryList}`,
     `- Majburiy xarajatlar (kamaytirib bo'lmaydi): ${fixedList}`,
     `- Moslashuvchan xarajatlar (kamaytirish mumkin): ${flexibleList}`,
+    ...budgetPlanLines,
     `- Tavsiya uchun yagona moslashuvchan asos: ${adviceTarget}`,
     `- Joriy sarflash sur'ati bo'yicha backend hisob-kitobi: ${metrics.projectionHint}`,
     '',
@@ -829,6 +892,7 @@ function buildAnalysisPrompt(metrics) {
     '5. Agar kamaytirish tavsiya qilsang, 1 qisqa jumlada nima uchun buni ehtiyot bilan qilish kerakligini ayt (masalan sifat yoki qulaylikka ta\'siri).',
     '6. "Kunlik limit", "kunlik budjet", "barobar oshdi" kabi iboralarni yozma. Ohang - do\'stona, lekin professional va to\'g\'ridan-to\'g\'ri. Ortiqcha emoji ishlatma (maksimal 2-3 ta).',
     "7. Javobni albatta tugallangan gap bilan yakunla; yarim so'z yoki yarim jumla qoldirma.",
+    ...budgetPlanRules,
     '',
     "Faqat tahlil matnini yoz, boshqa hech narsa qo'shma."
   ].join('\n');
@@ -1010,7 +1074,8 @@ async function generateAdvice(userData) {
     dayOfMonth: metrics.dayOfMonth,
     daysRemaining: metrics.daysRemaining,
     projectedMonthEndBalance: metrics.projectedMonthEndBalance,
-    canShowProjectedBalance: metrics.canShowProjectedBalance
+    canShowProjectedBalance: metrics.canShowProjectedBalance,
+    hasBudgetPlan: Boolean(metrics.budgetPlan)
   });
 
   try {

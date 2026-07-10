@@ -321,6 +321,15 @@ async function updateAwaitingPaymentByTelegramId(telegramId, awaitingPayment) {
 
 async function resetUserData(userId) {
   // Foydalanuvchi qatori qoladi, moliyaviy ma'lumotlar esa tozalanadi.
+  const budgetPlansDelete = await supabase
+    .from('budget_plans')
+    .delete()
+    .eq('user_id', userId);
+
+  if (budgetPlansDelete.error) {
+    throw budgetPlansDelete.error;
+  }
+
   const expensesDelete = await supabase
     .from('expenses')
     .delete()

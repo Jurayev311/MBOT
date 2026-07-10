@@ -1,7 +1,15 @@
 const cron = require('node-cron');
 
+const budgetPlanService = require('../services/budgetPlanService');
 const expenseService = require('../services/expenseService');
 const userService = require('../services/userService');
+
+const BUDGET_PLAN_START_PREFIX = 'budget_start_';
+const BUDGET_PLAN_SKIP_PREFIX = 'budget_skip_';
+
+function formatMoney(value) {
+  return `${new Intl.NumberFormat('uz-UZ').format(Math.round(Number(value || 0)))} so'm`;
+}
 
 function monthPromptMarkup() {
   // Asosiy ReplyKeyboard o'zgarmasligi uchun oy savoli inline tugmalar bilan beriladi.
@@ -37,6 +45,47 @@ async function notifyDailyReminder(bot, telegramId) {
     telegramId,
     "👋 Bugun hech narsa yozmadingiz. Xarajat bo'lgan bo'lsa, unutmang!"
   );
+}
+
+function budgetPlanOfferMarkup(telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '📋 Yangi reja', callback_data: `${BUDGET_PLAN_START_PREFIX}${telegramId}` },
+          { text: '➡️ Rejasiz davom etaman', callback_data: `${BUDGET_PLAN_SKIP_PREFIX}${telegramId}` }
+        ]
+      ]
+    }
+  };
+}
+
+function formatBudgetPlanFinalReport(progress) {
+  const plan = progress.plan;
+  const itemLines = progress.items.map((item) => {
+    const overAmount = Number(item.overAmount || 0);
+    const status = overAmount > 0 ? '⚠️' : '✅';
+    const suffix = overAmount > 0
+      ? `+${formatMoney(overAmount)} oshgan`
+      : 'yaxshi';
+
+    return `${status} ${item.category}: ${formatMoney(item.spent)} / ${formatMoney(item.plannedAmount)} (${suffix})`;
+  });
+  const totalOver = Math.max(0, Number(progress.totalSpent || 0) - Number(progress.totalPlanned || 0));
+  const totalSuffix = totalOver > 0
+    ? `, +${formatMoney(totalOver)} oshgan`
+    : '';
+
+  return [
+    `📅 Rejangizning muddati tugadi (${budgetPlanService.formatDate(plan.start_date)} — ${budgetPlanService.formatDate(plan.end_date)}).`,
+    '',
+    'Yakuniy natija:',
+    itemLines.join('\n'),
+    '',
+    `Jami: ${formatMoney(progress.totalSpent)} / ${formatMoney(progress.totalPlanned)} rejadan${totalSuffix}`,
+    '',
+    'Yangi davr uchun reja tuzasizmi?'
+  ].join('\n');
 }
 
 async function rolloverUserMonth(bot, user) {
@@ -85,13 +134,33 @@ async function expirePremiumIfNeeded(bot, user) {
   return updatedUser;
 }
 
+async function closeExpiredBudgetPlanIfNeeded(bot, user, date = new Date()) {
+  const expiredPlan = await budgetPlanService.getExpiredActiveBudgetPlan(user.id, date);
+
+  if (!expiredPlan) {
+    return;
+  }
+
+  const progress = await budgetPlanService.getBudgetPlanProgress(user.id, expiredPlan);
+  await budgetPlanService.closeBudgetPlan(user.id, expiredPlan.id);
+
+  if (bot && user.telegram_id) {
+    await bot.sendMessage(
+      user.telegram_id,
+      formatBudgetPlanFinalReport(progress),
+      budgetPlanOfferMarkup(user.telegram_id)
+    );
+  }
+}
+
 async function runMonthCheck(bot) {
   const users = await userService.getAllUsers();
 
   for (const user of users) {
     try {
       const checkedUser = await expirePremiumIfNeeded(bot, user);
-      await rolloverUserMonth(bot, checkedUser);
+      const updatedUser = await rolloverUserMonth(bot, checkedUser);
+      await closeExpiredBudgetPlanIfNeeded(bot, updatedUser);
     } catch (error) {
       console.error(`Kunlik tekshiruvda xato: user=${user.id}`, error);
     }
@@ -147,6 +216,7 @@ function startMonthCheck(bot) {
 
 module.exports = {
   expirePremiumIfNeeded,
+  closeExpiredBudgetPlanIfNeeded,
   notifyDailyReminder,
   notifyNewMonth,
   notifyPremiumExpired,
