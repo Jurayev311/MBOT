@@ -531,7 +531,7 @@ function getUserState(telegramId) {
     return null;
   }
 
-  const isExpired = Date.now() - state.createdAt > 15 * 60 * 1000;
+  const isExpired = Date.now() - state.createdAt > 30 * 60 * 1000; // Extended from 15 to 30 minutes
   if (isExpired) {
     clearUserState(telegramId);
     return null;
@@ -1948,6 +1948,11 @@ async function handleExpenseText(bot, chatId, user, text) {
   const cleanText = String(text || '').trim();
 
   if (!cleanText || cleanText.length > 200) {
+    console.log('[EXPENSE_DEBUG] Text rejected (length check):', {
+      textLength: cleanText.length,
+      maxLength: 200,
+      message: "Should have been caught by budget plan handler if state was set"
+    });
     await bot.sendMessage(chatId, "Xarajat yoki kirim matni 1 dan 200 belgigacha bo'lishi kerak.", MAIN_KEYBOARD);
     return;
   }
@@ -2707,6 +2712,16 @@ async function handleMessage(bot, msg) {
     user = await rolloverUserMonth(bot, user);
     const state = getUserState(telegramId);
     const normalizedText = text.trim();
+    
+    // Debug state
+    if (text.length > 100) {
+      console.log('[STATE_DEBUG] Message received:', {
+        telegramId,
+        hasState: !!state,
+        stateType: state?.type,
+        textLength: text.length
+      });
+    }
 
     if (state && isMainKeyboardButtonText(normalizedText)) {
       if (state.type === 'awaiting_budget_plan_dates') {
@@ -2793,11 +2808,13 @@ async function handleMessage(bot, msg) {
     }
 
     if (state?.type === 'awaiting_budget_plan_items') {
+      console.log('[BUDGET_PLAN_DEBUG] State found: awaiting_budget_plan_items, calling handler');
       await handleBudgetPlanItemsInput(bot, chatId, telegramId, user, state.data, normalizedText);
       return;
     }
 
     if (state?.type === 'awaiting_budget_plan_action') {
+      console.log('[BUDGET_PLAN_DEBUG] State found: awaiting_budget_plan_action, not items');
       await handleBudgetPlanActionInput(bot, chatId, telegramId, state.data, normalizedText);
       return;
     }
