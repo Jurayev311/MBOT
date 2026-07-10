@@ -185,27 +185,31 @@ function normalizeCategory(category) {
 }
 
 function normalizePlanItems(items = []) {
-  const byCategory = new Map();
-
-  for (const item of items) {
-    const amount = parseAmount(item?.planned_amount ?? item?.amount ?? 0);
-
-    if (!amount) {
-      continue;
-    }
-
-    if (item?.type === 'income' || String(item?.category || '').trim() === 'Kirim') {
-      continue;
-    }
-
-    const category = normalizeCategory(item?.category);
-    byCategory.set(category, Number(byCategory.get(category) || 0) + amount);
-  }
-
-  return [...byCategory.entries()].map(([category, plannedAmount]) => ({
-    category,
-    plannedAmount
-  }));
+  // Har bir item alohida qoladi - kategoriya bo'yicha aggregation qilmamiz
+  // Sababi: Budget plan'dagi har bir band alohida item bo'lishi kerak
+  
+  return items
+    .map((item) => {
+      const amount = parseAmount(item?.planned_amount ?? item?.amount ?? 0);
+      
+      // Tuhi yoki 0 summa bo'lsa, skip
+      if (!amount) {
+        return null;
+      }
+      
+      // Income bo'lsa, skip
+      if (item?.type === 'income' || String(item?.category || '').trim() === 'Kirim') {
+        return null;
+      }
+      
+      const category = normalizeCategory(item?.category);
+      
+      return {
+        category,
+        plannedAmount: amount
+      };
+    })
+    .filter((item) => item !== null);
 }
 
 async function getBudgetPlanItems(planId, userId) {

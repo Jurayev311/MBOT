@@ -898,6 +898,17 @@ function generateLocalAdvice(userData) {
 async function categorizeExpense(text) {
   const cleanText = compactInput(text, 200);
 
+  // DEBUG: Input text kesib qolyaptimi tekshirish
+  if (isAiDebugEnabled()) {
+    console.log('\n========== INPUT COMPACTION CHECK ==========');
+    console.log('ORIGINAL LENGTH:', String(text || '').length);
+    console.log('ORIGINAL TEXT:', String(text || ''));
+    console.log('COMPACT LENGTH:', cleanText.length);
+    console.log('COMPACT TEXT:', cleanText);
+    console.log('TRUNCATED?', String(text || '').length > cleanText.length);
+    console.log('==========================================\n');
+  }
+
   if (!cleanText) {
     throw new Error("Operatsiya matni bo'sh bo'lmasligi kerak.");
   }
@@ -941,6 +952,13 @@ async function categorizeExpense(text) {
 
   debugAi('categorizeExpense.model', getConfiguredModelName());
   debugAi('categorizeExpense.input', cleanText);
+  
+  // DEBUG: Prompt matnini ko'rish
+  if (isAiDebugEnabled()) {
+    console.log('\n========== CATEGORIZE PROMPT (TON) ==========');
+    console.log(prompt);
+    console.log('==========================================\n');
+  }
 
   let rawText = '';
 
@@ -957,6 +975,15 @@ async function categorizeExpense(text) {
     rawText = result.response.text();
     debugAi('categorizeExpense.rawResponse', rawText);
     debugAi('categorizeExpense.finishReason', result.response.candidates?.[0]?.finishReason);
+    
+    // DEBUG: Raw javobni to'liqday ko'rish
+    if (isAiDebugEnabled()) {
+      console.log('\n========== GEMINI RAW RESPONSE (TON) ==========');
+      console.log('LENGTH:', rawText.length);
+      console.log('CONTENT:');
+      console.log(rawText);
+      console.log('==============================================\n');
+    }
   } catch (error) {
     debugAi('categorizeExpense.requestError', {
       model: geminiModelName || getConfiguredModelName(),
@@ -976,6 +1003,23 @@ async function categorizeExpense(text) {
     const parsed = JSON.parse(extractJson(rawText));
     return normalizeExpenseListPayload(parsed, cleanText);
   } catch (parseError) {
+    // DEBUG: Extract JSON va parse xatosini detail ko'rish
+    if (isAiDebugEnabled()) {
+      console.log('\n========== JSON PARSE ERROR (TON) ==========');
+      try {
+        const extracted = extractJson(rawText);
+        console.log('EXTRACTED JSON LENGTH:', extracted.length);
+        console.log('EXTRACTED JSON:');
+        console.log(extracted);
+      } catch (extractError) {
+        console.log('EXTRACT ERROR:', extractError.message);
+        console.log('RAW TEXT:', rawText.slice(0, 500));
+      }
+      console.log('PARSE ERROR:', parseError.message);
+      console.log('PARSE STACK:', parseError.stack);
+      console.log('==========================================\n');
+    }
+    
     debugAi('categorizeExpense.jsonParseError', {
       rawText: rawText.slice(0, 500),
       error: parseError.message
