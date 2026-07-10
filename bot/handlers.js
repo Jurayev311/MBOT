@@ -1766,9 +1766,14 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
       stack: error.stack
     });
 
+    const isCategoryConstraintError = error.code === '23514'
+      && String(error.message || '').toLowerCase().includes('category');
+
     await bot.sendMessage(
       chatId,
-      "Reja tushunildi, lekin saqlashda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.",
+      isCategoryConstraintError
+        ? "Reja tushunildi, lekin bazadagi kategoriya ro'yxati yangilanmagan. Supabase migratsiyasini ishga tushiring."
+        : "Reja tushunildi, lekin saqlashda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.",
       getBudgetPlanCancelMarkup(telegramId)
     );
   }

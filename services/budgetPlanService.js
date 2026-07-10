@@ -188,7 +188,7 @@ function normalizePlanItems(items = []) {
   const groupedItems = new Map();
 
   for (const item of items) {
-    const amount = parseAmount(item?.planned_amount ?? item?.amount ?? 0);
+    const amount = parseAmount(item?.planned_amount ?? item?.plannedAmount ?? item?.amount ?? 0);
 
     if (!amount) {
       continue;
