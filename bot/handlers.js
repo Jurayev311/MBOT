@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 
-const { categorizeExpense, categorizeVoiceExpense, generateAdvice, generatePlanGoalAnalysis } = require('../services/ai');
+const { CATEGORIES, categorizeExpense, categorizeVoiceExpense, generateAdvice, generatePlanGoalAnalysis } = require('../services/ai');
 const apiUsageService = require('../services/apiUsageService');
 const budgetPlanService = require('../services/budgetPlanService');
 const expenseService = require('../services/expenseService');
@@ -23,6 +23,8 @@ const SETTINGS_EXPORT_EXCEL_CALLBACK = 'settings_export_excel';
 const BUDGET_PLAN_BUTTON_TEXT = '📆 Rejam';
 const BUDGET_PLAN_START_PREFIX = 'budget_start_';
 const BUDGET_PLAN_SKIP_PREFIX = 'budget_skip_';
+const BUDGET_PLAN_CANCEL_PREFIX = 'budget_cancel_';
+const BUDGET_PLAN_CATEGORIES = CATEGORIES.filter((category) => category !== 'Kirim');
 
 const CLEAR_CONFIRM_INLINE_KEYBOARD = {
   reply_markup: {
@@ -205,6 +207,16 @@ function getBudgetPlanOfferMarkup(telegramId, startLabel = '📋 Reja tuzaman') 
   };
 }
 
+function getBudgetPlanCancelMarkup(telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '❌ Bekor qilish', callback_data: `${BUDGET_PLAN_CANCEL_PREFIX}${telegramId}` }]
+      ]
+    }
+  };
+}
+
 function getPlanGoalCancelMarkup() {
   return {
     reply_markup: {
@@ -262,6 +274,13 @@ function parseBudgetPlanCallback(data) {
     return {
       action: 'skip',
       telegramId: value.slice(BUDGET_PLAN_SKIP_PREFIX.length)
+    };
+  }
+
+  if (value.startsWith(BUDGET_PLAN_CANCEL_PREFIX)) {
+    return {
+      action: 'cancel',
+      telegramId: value.slice(BUDGET_PLAN_CANCEL_PREFIX.length)
     };
   }
 
@@ -531,8 +550,12 @@ function isPlanGoalButtonText(text) {
     .includes('reja va maqsad');
 }
 
+function normalizeKeyboardText(text) {
+  return String(text || '').replace(/\uFE0F/g, '').trim();
+}
+
 function getMainKeyboardAction(text) {
-  const normalizedText = String(text || '').trim();
+  const normalizedText = normalizeKeyboardText(text);
 
   if (normalizedText === '📊 Hisobot') {
     return 'report';
@@ -550,7 +573,7 @@ function getMainKeyboardAction(text) {
     return 'settings';
   }
 
-  if (normalizedText === BUDGET_PLAN_BUTTON_TEXT) {
+  if (normalizedText === BUDGET_PLAN_BUTTON_TEXT || normalizedText.toLowerCase().includes('rejam')) {
     return 'budgetPlan';
   }
 
@@ -652,14 +675,35 @@ function buildBudgetPlanDatePromptText() {
   ].join('\n');
 }
 
+function formatBudgetPlanDateRange(startDate, endDate) {
+  return `${budgetPlanService.formatDate(startDate)} — ${budgetPlanService.formatDate(endDate)}`;
+}
+
+function formatBudgetPlanCategoryList() {
+  return BUDGET_PLAN_CATEGORIES.join(', ');
+}
+
 function buildBudgetPlanItemsPromptText(startDate, endDate) {
   return [
-    `✅ Muddat: ${budgetPlanService.formatDate(startDate)} — ${budgetPlanService.formatDate(endDate)}`,
+    `✅ Muddat: ${formatBudgetPlanDateRange(startDate, endDate)}`,
     '',
     'Endi shu muddat uchun kategoriya bo\'yicha reja summalarini yozing.',
-    'Bir nechtasini birga yozishingiz mumkin:',
     '',
-    "Misol: 'Oziq-ovqat 800000, Transport 300000, Uy-joy 1200000'"
+    `Mavjud kategoriyalar: ${formatBudgetPlanCategoryList()}`,
+    '',
+    'Bir nechtasini birga yozishingiz mumkin. Misol:',
+    "'Oziq-ovqat 800000, Transport 300000, Uy-joy 1200000'"
+  ].join('\n');
+}
+
+function buildBudgetPlanContinueText(stateData = {}) {
+  const dateText = formatBudgetPlanDateRange(stateData.startDate, stateData.endDate);
+
+  return [
+    `Siz hozir reja tuzish jarayonidasiz (muddat: ${dateText}).`,
+    'Davom etish uchun kategoriya summalarini yozing, yoki bekor qilish uchun tugmani bosing:',
+    '',
+    `Mavjud kategoriyalar: ${formatBudgetPlanCategoryList()}`
   ].join('\n');
 }
 
@@ -1455,14 +1499,18 @@ async function handlePlanGoalInput(bot, chatId, telegramId, user, stateData, tex
 async function startBudgetPlanSetup(bot, chatId, telegramId) {
   clearUserState(telegramId);
   setUserState(telegramId, 'awaiting_budget_plan_dates');
-  await bot.sendMessage(chatId, buildBudgetPlanDatePromptText(), MAIN_KEYBOARD);
+  await bot.sendMessage(chatId, buildBudgetPlanDatePromptText(), getBudgetPlanCancelMarkup(telegramId));
 }
 
 async function handleBudgetPlanDateInput(bot, chatId, telegramId, text) {
   const dateRange = budgetPlanService.parseBudgetDateRange(text);
 
   if (!dateRange) {
-    await bot.sendMessage(chatId, "Sana oralig'ini tushunmadim. Masalan: 12-iyundan 15-iyulgacha", MAIN_KEYBOARD);
+    await bot.sendMessage(
+      chatId,
+      "Sana oralig'ini tushunmadim. Masalan: 12-iyundan 15-iyulgacha",
+      getBudgetPlanCancelMarkup(telegramId)
+    );
     return;
   }
 
@@ -1470,7 +1518,7 @@ async function handleBudgetPlanDateInput(bot, chatId, telegramId, text) {
   await bot.sendMessage(
     chatId,
     buildBudgetPlanItemsPromptText(dateRange.startDate, dateRange.endDate),
-    MAIN_KEYBOARD
+    getBudgetPlanCancelMarkup(telegramId)
   );
 }
 
@@ -1478,7 +1526,11 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
   const planText = String(text || '').trim();
 
   if (!planText || planText.length > 800) {
-    await bot.sendMessage(chatId, "Reja matni 1 dan 800 belgigacha bo'lishi kerak.", MAIN_KEYBOARD);
+    await bot.sendMessage(
+      chatId,
+      "Reja matni 1 dan 800 belgigacha bo'lishi kerak.",
+      getBudgetPlanCancelMarkup(telegramId)
+    );
     return;
   }
 
@@ -1486,7 +1538,7 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
   const todayUsageCount = userService.getDailyUsageCount(user, 'text');
 
   if (todayUsageCount >= dailyLimit) {
-    await bot.sendMessage(chatId, buildLimitReachedText(dailyLimit), getPaymentStartMarkup());
+    await bot.sendMessage(chatId, buildLimitReachedText(dailyLimit), getBudgetPlanCancelMarkup(telegramId));
     return;
   }
 
@@ -1500,7 +1552,11 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
     })));
 
     if (!items.length) {
-      await bot.sendMessage(chatId, "Rejada kategoriya va summa topilmadi. Masalan: Oziq-ovqat 800000, Transport 300000", MAIN_KEYBOARD);
+      await bot.sendMessage(
+        chatId,
+        "Rejada kategoriya va summa topilmadi. Masalan: Oziq-ovqat 800000, Transport 300000",
+        getBudgetPlanCancelMarkup(telegramId)
+      );
       return;
     }
 
@@ -1517,11 +1573,19 @@ async function handleBudgetPlanItemsInput(bot, chatId, telegramId, user, stateDa
     console.error('Byudjet rejasini saqlashda xato:', error);
 
     if (error.code === 'AI_TEMPORARILY_UNAVAILABLE') {
-      await bot.sendMessage(chatId, error.userMessage || "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.", MAIN_KEYBOARD);
+      await bot.sendMessage(
+        chatId,
+        error.userMessage || "Hozir tizim biroz band, 1 daqiqadan keyin qayta urinib ko'ring.",
+        getBudgetPlanCancelMarkup(telegramId)
+      );
       return;
     }
 
-    await bot.sendMessage(chatId, "Rejani tushunmadim. Masalan: Oziq-ovqat 800000, Transport 300000", MAIN_KEYBOARD);
+    await bot.sendMessage(
+      chatId,
+      "Rejani tushunmadim. Masalan: Oziq-ovqat 800000, Transport 300000",
+      getBudgetPlanCancelMarkup(telegramId)
+    );
   }
 }
 
@@ -2283,6 +2347,12 @@ async function handleCallback(bot, query) {
       await consumeCallbackMessage(bot, query, callbackKey);
       const user = await userService.ensureUser(query.from);
 
+      if (budgetPlanCallback.action === 'cancel') {
+        clearUserState(telegramId);
+        await bot.sendMessage(chatId, "Reja tuzish bekor qilindi.", MAIN_KEYBOARD);
+        return;
+      }
+
       if (budgetPlanCallback.action === 'skip') {
         clearUserState(telegramId);
         await bot.sendMessage(chatId, "Mayli, rejasiz davom etamiz. Xarajat yoki kirimni yozavering.", MAIN_KEYBOARD);
@@ -2498,6 +2568,29 @@ async function handleMessage(bot, msg) {
     const normalizedText = text.trim();
 
     if (state && isMainKeyboardButtonText(normalizedText)) {
+      if (state.type === 'awaiting_budget_plan_dates') {
+        await bot.sendMessage(
+          chatId,
+          [
+            'Siz hozir reja tuzish jarayonidasiz.',
+            "Davom etish uchun sana oralig'ini yozing, yoki bekor qilish uchun tugmani bosing:",
+            '',
+            'Masalan: 12-iyundan 15-iyulgacha'
+          ].join('\n'),
+          getBudgetPlanCancelMarkup(telegramId)
+        );
+        return;
+      }
+
+      if (state.type === 'awaiting_budget_plan_items') {
+        await bot.sendMessage(
+          chatId,
+          buildBudgetPlanContinueText(state.data),
+          getBudgetPlanCancelMarkup(telegramId)
+        );
+        return;
+      }
+
       clearUserState(telegramId);
       await handleMainKeyboardButton(bot, chatId, telegramId, user, normalizedText);
       return;
