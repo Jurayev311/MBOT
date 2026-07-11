@@ -759,7 +759,7 @@ function buildSalarySavedText(salary) {
     '📝 "50000 qarzim qaytdi" — kirim',
     '',
     '🆓 Bepul: 15 xarajat, 2 ovozli/kun',
-    '💎 Premium: 50 xarajat, 10 ovozli/kun — /premium_narxi'
+    '💎 Premium: 50 xarajat, 10 ovozli/kun, Excel — /premium_narxi'
   ].join('\n');
 }
 
@@ -985,13 +985,20 @@ function buildPremiumPriceText() {
   return [
     `💎 Premium — ${formatPaymentPrice()} so'm/oy`,
     '',
-    '📝 50 ta matn/kun',
-    '🎤 10 ta ovozli/kun',
-    '🎯 Reja va Maqsad tahlili',
+    ...buildPremiumFeatureLines(),
     '',
     `💳 Karta: ${getPaymentCardNumber()}`,
     "To'lovdan keyin pastdagi tugma orqali chek yuboring."
   ].join('\n');
+}
+
+function buildPremiumFeatureLines() {
+  return [
+    '📝 50 ta matn/kun',
+    '🎤 10 ta ovozli/kun',
+    '🎯 Reja va Maqsad tahlili',
+    '📥 Oylik hisobotni Excel qilib yuklab olish'
+  ];
 }
 
 function buildPlanGoalPremiumOnlyText() {
@@ -1040,21 +1047,17 @@ function buildPlanGoalResultText(analysisText) {
 function buildLimitReachedText(dailyLimit) {
   return [
     `Bugungi bepul limit tugadi (${dailyLimit} ta).`,
-    `💎 Premium: ${formatPaymentPrice()} so'm/oy`,
-    '📝 50 ta matn/kun, 🎤 10 ta ovozli/kun',
     '',
-    `💳 Karta: ${getPaymentCardNumber()}`,
-    "To'lovdan keyin pastdagi tugma orqali chek yuboring."
+    buildPremiumPriceText()
   ].join('\n');
 }
 
 function buildFreeVoiceLimitReachedText(usedCount, dailyVoiceLimit) {
   return [
     `🎤 Bugungi ovozli limit tugadi (${usedCount}/${dailyVoiceLimit}).`,
-    `💎 Premium: ${formatPaymentPrice()} so'm/oy`,
-    '🎤 10 ta ovozli/kun',
     '',
-    `💳 Karta: ${getPaymentCardNumber()}`,
+    buildPremiumPriceText(),
+    '',
     "Yoki matn bilan yozing: 25000 nonga."
   ].join('\n');
 }
