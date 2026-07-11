@@ -52,7 +52,7 @@ function getSettingsInlineKeyboard(user) {
   ];
 
   if (user?.is_premium) {
-    inlineKeyboard.push([{ text: '📥 Excel hisobot', callback_data: SETTINGS_EXPORT_EXCEL_CALLBACK }]);
+    inlineKeyboard.push([{ text: '📥 Excel hisobot (5 limit)', callback_data: SETTINGS_EXPORT_EXCEL_CALLBACK }]);
   }
 
   return {
@@ -73,6 +73,7 @@ const RATE_LIMIT_COUNT = Number.isInteger(configuredRateLimitCount) && configure
   : DEFAULT_RATE_LIMIT_COUNT;
 const FREE_DAILY_LIMIT = 15;
 const PREMIUM_DAILY_LIMIT = 50;
+const EXCEL_EXPORT_LIMIT_COST = 5;
 const FREE_DAILY_VOICE_LIMIT = 2;
 const PREMIUM_DAILY_VOICE_LIMIT = 10;
 const ADMIN_USERS_PAGE_SIZE = 10;
@@ -996,6 +997,7 @@ function buildSettingsText(user, todayExpenseCount) {
       `📅 Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`,
       `⏳ Qolgan kunlar: ${formatRemainingDays(user.premium_expires_at)}`,
       `📊 Bugun: ${todayExpenseCount}/${dailyLimit}`,
+      `📥 Excel eksport: ${EXCEL_EXPORT_LIMIT_COST} ta limit`,
       '',
       'Kerakli amalni tanlang:'
     ].join('\n');
@@ -1376,6 +1378,19 @@ async function sendExcelReport(bot, chatId, user) {
     return;
   }
 
+  const dailyLimit = getUserDailyLimit(user);
+  const todayUsageCount = userService.getDailyUsageCount(user, 'text');
+  const remainingLimit = Math.max(0, dailyLimit - todayUsageCount);
+
+  if (remainingLimit < EXCEL_EXPORT_LIMIT_COST) {
+    await bot.sendMessage(
+      chatId,
+      `Excel hisobot uchun ${EXCEL_EXPORT_LIMIT_COST} ta limit kerak, lekin sizda bugun faqat ${remainingLimit} ta qoldi. Ertaga qayta urinib ko'ring.`,
+      MAIN_KEYBOARD
+    );
+    return;
+  }
+
   const month = user.current_month || userService.getMonthKey();
   const summary = await expenseService.getMonthlySummary(user.id, month);
   const fileName = getExcelReportFileName(month);
@@ -1390,6 +1405,8 @@ async function sendExcelReport(bot, chatId, user) {
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     }
   );
+
+  await userService.incrementDailyUsage(user, EXCEL_EXPORT_LIMIT_COST, 'text');
 }
 
 async function sendLongMessage(bot, chatId, text) {
@@ -2747,6 +2764,7 @@ async function handleCallback(bot, query) {
     }
 
     if (query.data === SETTINGS_EXPORT_EXCEL_CALLBACK) {
+      await answerCallback(bot, query);
       await sendExcelReport(bot, chatId, user);
       return;
     }
