@@ -60,7 +60,8 @@ function budgetPlanOfferMarkup(telegramId) {
   };
 }
 
-function formatBudgetPlanFinalReport(progress) {
+function formatBudgetPlanFinalReport(progress, options = {}) {
+  const offerNewPlan = options.offerNewPlan !== false;
   const plan = progress.plan;
   const itemLines = progress.items.map((item) => {
     const overAmount = Number(item.overAmount || 0);
@@ -71,6 +72,9 @@ function formatBudgetPlanFinalReport(progress) {
 
     return `${status} ${item.category}: ${formatMoney(item.spent)} / ${formatMoney(item.plannedAmount)} (${suffix})`;
   });
+  const unplannedLines = (progress.unplannedItems || []).map((item) => (
+    `⚠️ ${item.category}: ${formatMoney(item.spent)} rejadan tashqari`
+  ));
   const totalOver = Math.max(0, Number(progress.totalSpent || 0) - Number(progress.totalPlanned || 0));
   const totalSuffix = totalOver > 0
     ? `, +${formatMoney(totalOver)} oshgan`
@@ -81,15 +85,18 @@ function formatBudgetPlanFinalReport(progress) {
     '',
     'Yakuniy natija:',
     itemLines.join('\n'),
+    unplannedLines.length ? unplannedLines.join('\n') : null,
     '',
     `Jami: ${formatMoney(progress.totalSpent)} / ${formatMoney(progress.totalPlanned)} rejadan${totalSuffix}`,
     '',
-    'Yangi davr uchun reja tuzasizmi?'
-  ].join('\n');
+    offerNewPlan
+      ? 'Yangi davr uchun reja tuzasizmi?'
+      : "Avval yangi oy maoshini tasdiqlang. Keyin 📆 Rejam orqali yangi reja tuzishingiz mumkin."
+  ].filter((line) => line !== null).join('\n');
 }
 
-async function rolloverUserMonth(bot, user) {
-  const currentMonth = userService.getMonthKey();
+async function rolloverUserMonth(bot, user, date = new Date()) {
+  const currentMonth = userService.getMonthKey(date);
 
   if (!user.current_month) {
     return userService.updateCurrentMonth(user.id, currentMonth);
@@ -120,8 +127,8 @@ async function rolloverUserMonth(bot, user) {
   return updatedUser;
 }
 
-async function expirePremiumIfNeeded(bot, user) {
-  if (!userService.isPremiumExpired(user)) {
+async function expirePremiumIfNeeded(bot, user, date = new Date()) {
+  if (!userService.isPremiumExpired(user, date)) {
     return user;
   }
 
@@ -134,7 +141,7 @@ async function expirePremiumIfNeeded(bot, user) {
   return updatedUser;
 }
 
-async function closeExpiredBudgetPlanIfNeeded(bot, user, date = new Date()) {
+async function closeExpiredBudgetPlanIfNeeded(bot, user, date = new Date(), options = {}) {
   const expiredPlan = await budgetPlanService.getExpiredActiveBudgetPlan(user.id, date);
 
   if (!expiredPlan) {
@@ -147,22 +154,39 @@ async function closeExpiredBudgetPlanIfNeeded(bot, user, date = new Date()) {
   if (bot && user.telegram_id) {
     await bot.sendMessage(
       user.telegram_id,
-      formatBudgetPlanFinalReport(progress),
-      budgetPlanOfferMarkup(user.telegram_id)
+      formatBudgetPlanFinalReport(progress, options),
+      options.offerNewPlan === false ? undefined : budgetPlanOfferMarkup(user.telegram_id)
     );
   }
 }
 
-async function runMonthCheck(bot) {
+async function runMonthCheck(bot, date = new Date()) {
   const users = await userService.getAllUsers();
+  const currentMonth = userService.getMonthKey(date);
 
   for (const user of users) {
+    let checkedUser = user;
+
     try {
-      const checkedUser = await expirePremiumIfNeeded(bot, user);
-      const updatedUser = await rolloverUserMonth(bot, checkedUser);
-      await closeExpiredBudgetPlanIfNeeded(bot, updatedUser);
+      checkedUser = await expirePremiumIfNeeded(bot, user, date);
     } catch (error) {
-      console.error(`Kunlik tekshiruvda xato: user=${user.id}`, error);
+      console.error(`Premium tekshiruvida xato: user=${user.id}`, error);
+    }
+
+    const monthWillRollover = Boolean(checkedUser.current_month && checkedUser.current_month !== currentMonth);
+
+    try {
+      await closeExpiredBudgetPlanIfNeeded(bot, checkedUser, date, {
+        offerNewPlan: !monthWillRollover
+      });
+    } catch (error) {
+      console.error(`Reja muddati tekshiruvida xato: user=${user.id}`, error);
+    }
+
+    try {
+      await rolloverUserMonth(bot, checkedUser, date);
+    } catch (error) {
+      console.error(`Oy almashtirish tekshiruvida xato: user=${user.id}`, error);
     }
   }
 }
