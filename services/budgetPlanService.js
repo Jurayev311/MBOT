@@ -324,6 +324,77 @@ async function createBudgetPlan(userId, { startDate, endDate, items }) {
   return attachItems(plan);
 }
 
+async function addBudgetPlanItems(userId, planId, items) {
+  const normalizedItems = normalizePlanItems(items);
+
+  if (!normalizedItems.length) {
+    const emptyError = new Error('BUDGET_PLAN_ITEMS_EMPTY');
+    emptyError.code = 'BUDGET_PLAN_ITEMS_EMPTY';
+    throw emptyError;
+  }
+
+  const { data: plan, error: planError } = await supabase
+    .from('budget_plans')
+    .select(PLAN_SELECT_COLUMNS)
+    .eq('id', planId)
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (planError) {
+    throw planError;
+  }
+
+  if (!plan) {
+    const notFoundError = new Error('BUDGET_PLAN_NOT_FOUND');
+    notFoundError.code = 'BUDGET_PLAN_NOT_FOUND';
+    throw notFoundError;
+  }
+
+  const currentItems = await getBudgetPlanItems(plan.id, userId);
+  const itemByCategory = new Map(currentItems.map((item) => [item.category, item]));
+  const itemsToInsert = [];
+
+  for (const item of normalizedItems) {
+    const currentItem = itemByCategory.get(item.category);
+
+    if (!currentItem) {
+      itemsToInsert.push({
+        budget_plan_id: plan.id,
+        category: item.category,
+        planned_amount: item.plannedAmount
+      });
+      continue;
+    }
+
+    const nextAmount = Number(currentItem.planned_amount || 0) + Number(item.plannedAmount || 0);
+    const { data: updatedItem, error: updateError } = await supabase
+      .from('budget_plan_items')
+      .update({ planned_amount: nextAmount })
+      .eq('id', currentItem.id)
+      .select(ITEM_SELECT_COLUMNS)
+      .single();
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    itemByCategory.set(item.category, updatedItem);
+  }
+
+  if (itemsToInsert.length) {
+    const { error: insertError } = await supabase
+      .from('budget_plan_items')
+      .insert(itemsToInsert);
+
+    if (insertError) {
+      throw insertError;
+    }
+  }
+
+  return attachItems(plan);
+}
+
 async function updateBudgetPlanDates(userId, planId, { startDate, endDate }) {
   const { data, error } = await supabase
     .from('budget_plans')
@@ -429,12 +500,19 @@ async function getBudgetPlanProgress(userId, plan) {
       overAmount: Math.max(0, spent - plannedAmount)
     };
   });
+  const plannedCategories = new Set(items.map((item) => item.category));
+  const unplannedItems = Object.entries(spentByCategory)
+    .filter(([category, spent]) => !plannedCategories.has(category) && Number(spent) > 0)
+    .map(([category, spent]) => ({ category, spent: Number(spent) }))
+    .sort((a, b) => b.spent - a.spent);
 
   return {
     plan: planWithItems,
     items,
+    unplannedItems,
     totalPlanned: items.reduce((sum, item) => sum + item.plannedAmount, 0),
-    totalSpent: items.reduce((sum, item) => sum + item.spent, 0)
+    totalSpent: expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
+    totalUnplannedSpent: unplannedItems.reduce((sum, item) => sum + item.spent, 0)
   };
 }
 
@@ -452,14 +530,24 @@ async function getBudgetWarningsForExpenses(userId, expenses = [], date = new Da
       .map((expense) => expense.category)
   );
 
-  return progress.items
+  const plannedWarnings = progress.items
     .filter((item) => expenseCategories.has(item.category) && item.overAmount > 0)
     .map((item) => ({
+      type: 'over_limit',
       category: item.category,
       plannedAmount: item.plannedAmount,
       spent: item.spent,
       overAmount: item.overAmount
     }));
+  const unplannedWarnings = progress.unplannedItems
+    .filter((item) => expenseCategories.has(item.category))
+    .map((item) => ({
+      type: 'unplanned',
+      category: item.category,
+      spent: item.spent
+    }));
+
+  return [...plannedWarnings, ...unplannedWarnings];
 }
 
 async function getExpiredActiveBudgetPlan(userId, date = new Date()) {
@@ -498,6 +586,7 @@ async function closeBudgetPlan(userId, planId) {
 }
 
 module.exports = {
+  addBudgetPlanItems,
   closeActiveBudgetPlans,
   closeBudgetPlan,
   createBudgetPlan,

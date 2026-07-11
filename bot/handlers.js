@@ -854,20 +854,32 @@ function formatBudgetPlanProgressItem(item, index) {
 }
 
 function buildBudgetPlanViewText(progress) {
+  const unplannedLines = (progress.unplannedItems || []).map((item) => (
+    `- ${item.category} — ${formatMoney(item.spent)}`
+  ));
+
   return [
     `📆 Joriy reja (${formatBudgetPlanDateRange(progress.plan.start_date, progress.plan.end_date)}):`,
     '',
     progress.items.map(formatBudgetPlanProgressItem).join('\n'),
+    unplannedLines.length ? '' : null,
+    unplannedLines.length ? 'Rejadan tashqari xarajatlar:' : null,
+    unplannedLines.length ? unplannedLines.join('\n') : null,
     '',
     "Kategoriya summasini o'zgartirish uchun raqamini yozing.",
+    "Yangi band qo'shish uchun 'qo'shish' deb yozing.",
     "Muddatni o'zgartirish uchun 'sana' deb yozing."
-  ].join('\n');
+  ].filter((line) => line !== null).join('\n');
 }
 
 function formatBudgetWarningLines(warnings = []) {
-  return warnings.map((warning) => (
-    `⚠️ ${warning.category} rejangiz ${formatMoney(warning.plannedAmount)} edi, ${formatMoney(warning.overAmount)}ga oshib ketdingiz.`
-  ));
+  return warnings.map((warning) => {
+    if (warning.type === 'unplanned') {
+      return `⚠️ ${warning.category} rejangizda yo'q: ${formatMoney(warning.spent)} rejadan tashqari sarflandi.`;
+    }
+
+    return `⚠️ ${warning.category} rejangiz ${formatMoney(warning.plannedAmount)} edi, ${formatMoney(warning.overAmount)}ga oshib ketdingiz.`;
+  });
 }
 
 function buildNamePromptText() {
@@ -1653,6 +1665,32 @@ function mapTransactionsToPlanItems(transactions) {
   }));
 }
 
+function normalizeBudgetPlanCommand(text) {
+  return String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[‘’`ʻ]/g, "'")
+    .replace(/\s+/g, ' ');
+}
+
+function isBudgetPlanAddCommand(text) {
+  const normalizedText = normalizeBudgetPlanCommand(text);
+
+  return normalizedText === '+'
+    || normalizedText === 'add'
+    || normalizedText === 'yangi'
+    || normalizedText.includes("qo'sh")
+    || normalizedText.includes('qosh');
+}
+
+function isBudgetPlanCancelText(text) {
+  const normalizedText = normalizeBudgetPlanCommand(text);
+
+  return normalizedText === 'bekor'
+    || normalizedText === 'cancel'
+    || normalizedText === 'bekor qilish';
+}
+
 async function parseBudgetPlanItems(planText) {
   const localTransactions = getExpenseTransactions(
     parseExpensesLocally(planText, { maxLength: BUDGET_PLAN_TEXT_MAX_LENGTH }) || []
@@ -1805,7 +1843,7 @@ async function handleBudgetPlanViewOrStart(bot, chatId, telegramId, user) {
   await showBudgetPlan(bot, chatId, telegramId, user);
 }
 
-async function handleBudgetPlanActionInput(bot, chatId, telegramId, stateData, text) {
+async function handleBudgetPlanActionInput(bot, chatId, telegramId, user, stateData, text) {
   const normalizedText = String(text || '').trim().toLowerCase();
 
   if (normalizedText === 'sana') {
@@ -1829,11 +1867,38 @@ async function handleBudgetPlanActionInput(bot, chatId, telegramId, stateData, t
     return;
   }
 
-  const index = Number.parseInt(normalizedText, 10);
-  const item = (stateData.items || []).find((candidate) => candidate.index === index);
+  if (isBudgetPlanAddCommand(normalizedText)) {
+    setUserState(telegramId, 'awaiting_budget_plan_add_items', {
+      userId: stateData.userId,
+      planId: stateData.planId
+    });
+    await bot.sendMessage(
+      chatId,
+      [
+        "Qo'shiladigan reja bandlarini oddiy matnda yozing.",
+        "Masalan: transport 300000, aloqa 35000, doriga 120000",
+        '',
+        "Bekor qilish uchun 'bekor' deb yozing."
+      ].join('\n'),
+      MAIN_KEYBOARD
+    );
+    return;
+  }
+
+  const isItemNumber = /^\d+$/.test(normalizedText);
+  const index = isItemNumber ? Number.parseInt(normalizedText, 10) : null;
+  const item = isItemNumber
+    ? (stateData.items || []).find((candidate) => candidate.index === index)
+    : null;
 
   if (!item) {
-    await bot.sendMessage(chatId, "Raqamni yoki 'sana' deb yozing.", MAIN_KEYBOARD);
+    if (isItemNumber) {
+      await bot.sendMessage(chatId, "Bunday reja bandi yo'q. Ro'yxatdagi raqamni yozing.", MAIN_KEYBOARD);
+      return;
+    }
+
+    clearUserState(telegramId);
+    await handleExpenseText(bot, chatId, user, text);
     return;
   }
 
@@ -1843,6 +1908,70 @@ async function handleBudgetPlanActionInput(bot, chatId, telegramId, stateData, t
     `${item.category} uchun yangi reja summasini kiriting (hozirgi: ${formatMoney(item.plannedAmount)}):`,
     MAIN_KEYBOARD
   );
+}
+
+async function handleBudgetPlanAddItemsInput(bot, chatId, telegramId, user, stateData, text) {
+  const planText = String(text || '').trim();
+
+  if (isBudgetPlanCancelText(planText)) {
+    await bot.sendMessage(chatId, "Qo'shish bekor qilindi.", MAIN_KEYBOARD);
+    await showBudgetPlan(bot, chatId, telegramId, user);
+    return;
+  }
+
+  if (!planText) {
+    await bot.sendMessage(chatId, "Qo'shiladigan bandlarni yozing. Masalan: transport 300000, aloqa 35000", MAIN_KEYBOARD);
+    return;
+  }
+
+  let parsedPlan;
+
+  try {
+    parsedPlan = await parseBudgetPlanItems(planText);
+  } catch (error) {
+    console.error('[BUDGET_PLAN_ADD_PARSE_ERROR] Full error:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    });
+
+    await bot.sendMessage(
+      chatId,
+      "Qo'shiladigan bandlarni tushunmadim. Masalan: transport 300000, aloqa 35000",
+      MAIN_KEYBOARD
+    );
+    return;
+  }
+
+  if (!parsedPlan.items.length) {
+    await bot.sendMessage(chatId, "Qo'shish uchun summa topilmadi. Masalan: transport 300000, aloqa 35000", MAIN_KEYBOARD);
+    return;
+  }
+
+  try {
+    const plan = await budgetPlanService.addBudgetPlanItems(user.id, stateData.planId, parsedPlan.items);
+    await bot.sendMessage(chatId, "✅ Rejaga qo'shildi.", MAIN_KEYBOARD);
+    await showBudgetPlan(bot, chatId, telegramId, user, plan);
+  } catch (error) {
+    console.error('[BUDGET_PLAN_ADD_SAVE_ERROR] Full error:', {
+      message: error.message,
+      code: error.code,
+      parsedSource: parsedPlan.source,
+      itemCount: parsedPlan.items.length,
+      stack: error.stack
+    });
+
+    const isCategoryConstraintError = error.code === '23514'
+      && String(error.message || '').toLowerCase().includes('category');
+
+    await bot.sendMessage(
+      chatId,
+      isCategoryConstraintError
+        ? "Bandlar tushunildi, lekin bazadagi kategoriya ro'yxati yangilanmagan. Supabase migratsiyasini ishga tushiring."
+        : "Bandlarni qo'shishda xato bo'ldi. Birozdan keyin qayta urinib ko'ring.",
+      MAIN_KEYBOARD
+    );
+  }
 }
 
 async function handleBudgetPlanItemAmountInput(bot, chatId, telegramId, user, stateData, text) {
@@ -2879,7 +3008,12 @@ async function handleMessage(bot, msg) {
 
     if (state?.type === 'awaiting_budget_plan_action') {
       console.log('[BUDGET_PLAN_DEBUG] State found: awaiting_budget_plan_action, not items');
-      await handleBudgetPlanActionInput(bot, chatId, telegramId, state.data, normalizedText);
+      await handleBudgetPlanActionInput(bot, chatId, telegramId, user, state.data, normalizedText);
+      return;
+    }
+
+    if (state?.type === 'awaiting_budget_plan_add_items') {
+      await handleBudgetPlanAddItemsInput(bot, chatId, telegramId, user, state.data, normalizedText);
       return;
     }
 
