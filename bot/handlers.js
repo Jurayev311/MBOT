@@ -33,6 +33,9 @@ const BUDGET_PLAN_SKIP_PREFIX = 'budget_skip_';
 const BUDGET_PLAN_CANCEL_PREFIX = 'budget_cancel_';
 const BUDGET_PLAN_DATE_CONFIRM_PREFIX = 'budget_date_ok_';
 const BUDGET_PLAN_DATE_RETRY_PREFIX = 'budget_date_retry_';
+const BUDGET_PLAN_MANAGE_EDIT_PREFIX = 'budget_manage_edit_';
+const BUDGET_PLAN_MANAGE_ADD_PREFIX = 'budget_manage_add_';
+const BUDGET_PLAN_MANAGE_DATE_PREFIX = 'budget_manage_date_';
 
 const CLEAR_CONFIRM_INLINE_KEYBOARD = {
   reply_markup: {
@@ -276,6 +279,22 @@ function getBudgetPlanDateConfirmMarkup(telegramId) {
   };
 }
 
+function getBudgetPlanManageMarkup(telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "✏️ Kategoriya o'zgartirish", callback_data: `${BUDGET_PLAN_MANAGE_EDIT_PREFIX}${telegramId}` },
+          { text: "➕ Yangi band qo'shish", callback_data: `${BUDGET_PLAN_MANAGE_ADD_PREFIX}${telegramId}` }
+        ],
+        [
+          { text: "📅 Muddatni o'zgartirish", callback_data: `${BUDGET_PLAN_MANAGE_DATE_PREFIX}${telegramId}` }
+        ]
+      ]
+    }
+  };
+}
+
 function getPlanGoalCancelMarkup() {
   return {
     reply_markup: {
@@ -355,6 +374,26 @@ function parseBudgetPlanCallback(data) {
       action: 'dateRetry',
       telegramId: value.slice(BUDGET_PLAN_DATE_RETRY_PREFIX.length)
     };
+  }
+
+  return null;
+}
+
+function parseBudgetPlanManageCallback(data) {
+  const value = String(data || '');
+  const actions = [
+    [BUDGET_PLAN_MANAGE_EDIT_PREFIX, 'edit'],
+    [BUDGET_PLAN_MANAGE_ADD_PREFIX, 'add'],
+    [BUDGET_PLAN_MANAGE_DATE_PREFIX, 'date']
+  ];
+
+  for (const [prefix, action] of actions) {
+    if (value.startsWith(prefix)) {
+      return {
+        action,
+        telegramId: value.slice(prefix.length)
+      };
+    }
   }
 
   return null;
@@ -866,6 +905,23 @@ function buildBudgetPlanViewText(progress) {
   const unplannedLines = (progress.unplannedItems || []).map((item) => (
     `- ${item.category} — ${formatMoney(item.spent)}`
   ));
+  const totalPlanned = (progress.items || []).reduce(
+    (sum, item) => sum + Number(item.plannedAmount || 0),
+    0
+  );
+  const plannedSpent = (progress.items || []).reduce(
+    (sum, item) => sum + Number(item.spent || 0),
+    0
+  );
+  const unplannedSpent = (progress.unplannedItems || []).reduce(
+    (sum, item) => sum + Number(item.spent || 0),
+    0
+  );
+  const totalSpent = plannedSpent + unplannedSpent;
+  const totalPercent = totalPlanned > 0 ? Math.round((totalSpent / totalPlanned) * 100) : 0;
+  const totalStatus = totalSpent > totalPlanned
+    ? `⚠️ Rejadan ${formatMoney(totalSpent - totalPlanned)}ga oshib ketdingiz`
+    : `✅ Qolgan: ${formatMoney(totalPlanned - totalSpent)}`;
 
   return [
     `📆 Joriy reja (${formatBudgetPlanDateRange(progress.plan.start_date, progress.plan.end_date)}):`,
@@ -875,9 +931,10 @@ function buildBudgetPlanViewText(progress) {
     unplannedLines.length ? 'Rejadan tashqari xarajatlar:' : null,
     unplannedLines.length ? unplannedLines.join('\n') : null,
     '',
-    "Kategoriya summasini o'zgartirish uchun raqamini yozing.",
-    "Yangi band qo'shish uchun 'qo'shish' deb yozing.",
-    "Muddatni o'zgartirish uchun 'sana' deb yozing."
+    '━━━━━━━━━━━━━━━',
+    `📊 Jami reja: ${formatMoney(totalPlanned)}`,
+    `💸 Jami sarflangan: ${formatMoney(totalSpent)} (${totalPercent}%)`,
+    totalStatus
   ].filter((line) => line !== null).join('\n');
 }
 
@@ -1845,7 +1902,7 @@ async function showBudgetPlan(bot, chatId, telegramId, user, plan = null) {
   }
 
   const progress = await budgetPlanService.getBudgetPlanProgress(user.id, activePlan);
-  setUserState(telegramId, 'awaiting_budget_plan_action', {
+  const stateData = {
     userId: user.id,
     planId: progress.plan.id,
     items: progress.items.map((item, index) => ({
@@ -1854,8 +1911,9 @@ async function showBudgetPlan(bot, chatId, telegramId, user, plan = null) {
       category: item.category,
       plannedAmount: item.plannedAmount
     }))
-  });
-  await bot.sendMessage(chatId, buildBudgetPlanViewText(progress), MAIN_KEYBOARD);
+  };
+  setUserState(telegramId, 'awaiting_budget_plan_action', stateData);
+  await bot.sendMessage(chatId, buildBudgetPlanViewText(progress), getBudgetPlanManageMarkup(telegramId));
 }
 
 async function handleBudgetPlanViewOrStart(bot, chatId, telegramId, user) {
@@ -1927,6 +1985,44 @@ async function handleBudgetPlanActionInput(bot, chatId, telegramId, user, stateD
     `${item.category} uchun yangi reja summasini kiriting (hozirgi: ${formatMoney(item.plannedAmount)}):`,
     MAIN_KEYBOARD
   );
+}
+
+async function handleBudgetPlanManageCallback(bot, query, user, manageCallback) {
+  const chatId = query.message.chat.id;
+  const telegramId = getTelegramId(query.from);
+  const activePlan = await budgetPlanService.getAnyActiveBudgetPlan(user.id);
+
+  if (!activePlan) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, "Sizda faol reja yo'q. Reja tuzishni boshlaymiz.", MAIN_KEYBOARD);
+    await startBudgetPlanSetup(bot, chatId, telegramId);
+    return;
+  }
+
+  const progress = await budgetPlanService.getBudgetPlanProgress(user.id, activePlan);
+  const stateData = {
+    userId: user.id,
+    planId: progress.plan.id,
+    items: progress.items.map((item, index) => ({
+      index: index + 1,
+      itemId: item.id,
+      category: item.category,
+      plannedAmount: item.plannedAmount
+    }))
+  };
+
+  if (manageCallback.action === 'edit') {
+    setUserState(telegramId, 'awaiting_budget_plan_action', stateData);
+    await bot.sendMessage(chatId, "Qaysi kategoriyani o'zgartirmoqchisiz? Raqamini yozing:", MAIN_KEYBOARD);
+    return;
+  }
+
+  if (manageCallback.action === 'add') {
+    await handleBudgetPlanActionInput(bot, chatId, telegramId, user, stateData, "qo'shish");
+    return;
+  }
+
+  await handleBudgetPlanActionInput(bot, chatId, telegramId, user, stateData, 'sana');
 }
 
 async function handleBudgetPlanAddItemsInput(bot, chatId, telegramId, user, stateData, text) {
@@ -2647,6 +2743,19 @@ async function handleCallback(bot, query) {
     }
 
     const budgetPlanCallback = parseBudgetPlanCallback(query.data);
+    const budgetPlanManageCallback = parseBudgetPlanManageCallback(query.data);
+
+    if (budgetPlanManageCallback) {
+      if (String(budgetPlanManageCallback.telegramId) !== telegramId) {
+        await answerCallback(bot, query, 'Bu tugma siz uchun emas.');
+        return;
+      }
+
+      await answerCallback(bot, query);
+      const user = await userService.ensureUser(query.from);
+      await handleBudgetPlanManageCallback(bot, query, user, budgetPlanManageCallback);
+      return;
+    }
 
     if (isCallbackMessageConsumed(callbackKey) && budgetPlanCallback?.action !== 'cancel') {
       await answerCallback(bot, query, "Bu so'rov allaqachon bajarilgan");
