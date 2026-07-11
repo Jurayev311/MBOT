@@ -75,6 +75,8 @@ const BROADCAST_SEND_DELAY_MS = 75;
 const BROADCAST_REPORT_LIST_LIMIT = 30;
 const BROADCAST_REPORT_MESSAGE_LIMIT = 3800;
 const BROADCAST_NAME_MAX_LENGTH = 80;
+const BROADCAST_TEXT_MAX_LENGTH = 4096;
+const BROADCAST_CONFIRM_PREVIEW_LENGTH = 3000;
 const DEFAULT_RATE_LIMIT_COUNT = 20;
 const configuredRateLimitCount = Number(process.env.RATE_LIMIT_PER_MINUTE);
 const RATE_LIMIT_COUNT = Number.isInteger(configuredRateLimitCount) && configuredRateLimitCount > 0
@@ -681,11 +683,10 @@ function parsePositiveAmount(text) {
 }
 
 function isPlanGoalButtonText(text) {
-  return String(text || '')
-    .replace(/\uFE0F/g, '')
-    .trim()
-    .toLowerCase()
-    .includes('reja va maqsad');
+  const normalizedText = normalizeKeyboardText(text);
+
+  return normalizedText === 'reja va maqsad'
+    || normalizedText === normalizeKeyboardText('🎯 Reja va Maqsad');
 }
 
 function normalizeKeyboardText(text) {
@@ -699,23 +700,23 @@ function normalizeKeyboardText(text) {
 function getMainKeyboardAction(text) {
   const normalizedText = normalizeKeyboardText(text);
 
-  if (normalizedText.includes('hisobot')) {
+  if (normalizedText === 'hisobot' || normalizedText === normalizeKeyboardText('📊 Hisobot')) {
     return 'report';
   }
 
-  if (normalizedText.includes('maosh')) {
+  if (normalizedText === 'maosh' || normalizedText === normalizeKeyboardText('💰 Maosh')) {
     return 'salary';
   }
 
-  if (normalizedText.includes('ai tahlil')) {
+  if (normalizedText === 'ai tahlil' || normalizedText === normalizeKeyboardText('🤖 AI Tahlil')) {
     return 'analysis';
   }
 
-  if (normalizedText.includes('sozlamalar')) {
+  if (normalizedText === 'sozlamalar' || normalizedText === normalizeKeyboardText('⚙️ Sozlamalar')) {
     return 'settings';
   }
 
-  if (normalizedText === normalizeKeyboardText(BUDGET_PLAN_BUTTON_TEXT) || normalizedText.includes('rejam')) {
+  if (normalizedText === 'rejam' || normalizedText === normalizeKeyboardText(BUDGET_PLAN_BUTTON_TEXT)) {
     return 'budgetPlan';
   }
 
@@ -2417,11 +2418,16 @@ function buildBroadcastResultMessages(result) {
 }
 
 function buildBroadcastConfirmText(text, userCount) {
+  const characters = Array.from(text);
+  const preview = characters.length > BROADCAST_CONFIRM_PREVIEW_LENGTH
+    ? `${characters.slice(0, BROADCAST_CONFIRM_PREVIEW_LENGTH).join('')}\n...[xabar davom etadi]`
+    : text;
+
   return [
     `📢 Quyidagi xabar BARCHA foydalanuvchilarga (${userCount} kishi) yuborilsin:`,
     '',
     '---',
-    text,
+    preview,
     '---',
     '',
     'Tasdiqlaysizmi?'
@@ -2458,8 +2464,8 @@ async function handleBroadcastMessageInput(bot, chatId, telegramId, from, text) 
     return;
   }
 
-  if (broadcastText.length > 3500) {
-    await bot.sendMessage(chatId, "Xabar juda uzun. 3500 belgidan oshirmay yuboring.", getBroadcastCancelMarkup());
+  if (Array.from(broadcastText).length > BROADCAST_TEXT_MAX_LENGTH) {
+    await bot.sendMessage(chatId, "Xabar juda uzun. 4096 belgidan oshirmay yuboring.", getBroadcastCancelMarkup());
     return;
   }
 
@@ -3320,15 +3326,24 @@ async function handleMessage(bot, msg) {
     user = await rolloverUserMonth(bot, user);
     const state = getUserState(telegramId);
     const normalizedText = text.trim();
-    
-    // Debug state
-    if (text.length > 100) {
-      console.log('[STATE_DEBUG] Message received:', {
-        telegramId,
-        hasState: !!state,
-        stateType: state?.type,
-        textLength: text.length
-      });
+
+    if (state?.type === 'awaiting_broadcast_message') {
+      await handleBroadcastMessageInput(bot, chatId, telegramId, msg.from, normalizedText);
+      return;
+    }
+
+    if (state?.type === 'awaiting_broadcast_confirm') {
+      if (!isAdminUser(msg.from)) {
+        clearUserState(telegramId);
+        return;
+      }
+
+      await bot.sendMessage(
+        chatId,
+        "Yuborish uchun tasdiqlash tugmasini bosing yoki bekor qiling.",
+        getBroadcastConfirmMarkup()
+      );
+      return;
     }
 
     if (state && isMainKeyboardButtonText(normalizedText)) {
@@ -3367,25 +3382,6 @@ async function handleMessage(bot, msg) {
       // Boshqa tugmalar bosilsa state tozala va tugmani ishlat
       clearUserState(telegramId);
       await handleMainKeyboardButton(bot, chatId, telegramId, user, normalizedText);
-      return;
-    }
-
-    if (state?.type === 'awaiting_broadcast_message') {
-      await handleBroadcastMessageInput(bot, chatId, telegramId, msg.from, normalizedText);
-      return;
-    }
-
-    if (state?.type === 'awaiting_broadcast_confirm') {
-      if (!isAdminUser(msg.from)) {
-        clearUserState(telegramId);
-        return;
-      }
-
-      await bot.sendMessage(
-        chatId,
-        "Yuborish uchun tasdiqlash tugmasini bosing yoki bekor qiling.",
-        getBroadcastConfirmMarkup()
-      );
       return;
     }
 
