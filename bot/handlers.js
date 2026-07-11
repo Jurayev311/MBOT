@@ -72,6 +72,9 @@ const BROADCAST_CONFIRM_CALLBACK = 'broadcast_confirm';
 const BROADCAST_CANCEL_CALLBACK = 'broadcast_cancel';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const BROADCAST_SEND_DELAY_MS = 75;
+const BROADCAST_REPORT_LIST_LIMIT = 30;
+const BROADCAST_REPORT_MESSAGE_LIMIT = 3800;
+const BROADCAST_NAME_MAX_LENGTH = 80;
 const DEFAULT_RATE_LIMIT_COUNT = 20;
 const configuredRateLimitCount = Number(process.env.RATE_LIMIT_PER_MINUTE);
 const RATE_LIMIT_COUNT = Number.isInteger(configuredRateLimitCount) && configuredRateLimitCount > 0
@@ -2362,11 +2365,55 @@ async function handleStatsCommand(bot, msg) {
 }
 
 function getBroadcastRecipients(users = []) {
-  const telegramIds = users
-    .map((user) => String(user?.telegram_id || '').trim())
-    .filter((telegramId) => /^\d+$/.test(telegramId));
+  const recipientsByTelegramId = new Map();
 
-  return [...new Set(telegramIds)];
+  for (const user of users) {
+    const telegramId = String(user?.telegram_id || '').trim();
+
+    if (!/^\d{1,20}$/.test(telegramId) || recipientsByTelegramId.has(telegramId)) {
+      continue;
+    }
+
+    const rawName = String(user?.full_name || '').replace(/\s+/g, ' ').trim();
+    const name = (rawName || "Noma'lum").slice(0, BROADCAST_NAME_MAX_LENGTH);
+
+    recipientsByTelegramId.set(telegramId, { telegramId, name });
+  }
+
+  return [...recipientsByTelegramId.values()];
+}
+
+function buildBroadcastResultSection(title, recipients) {
+  const visibleRecipients = recipients.slice(0, BROADCAST_REPORT_LIST_LIMIT);
+  const lines = visibleRecipients.map((recipient, index) => (
+    `${index + 1}. ${recipient.name} (ID: ${recipient.telegramId})`
+  ));
+  const hiddenCount = recipients.length - visibleRecipients.length;
+
+  if (hiddenCount > 0) {
+    lines.push(`... va yana ${hiddenCount} kishi.`);
+  }
+
+  return [title, ...lines].join('\n');
+}
+
+function buildBroadcastResultMessages(result) {
+  const summary = `✅ Xabar yuborildi: ${result.successful.length} kishiga muvaffaqiyatli, ${result.failed.length} kishiga yuborib bo'lmadi.`;
+  const sections = [];
+
+  if (result.successful.length) {
+    sections.push(buildBroadcastResultSection('Muvaffaqiyatli yuborildi:', result.successful));
+  }
+
+  if (result.failed.length) {
+    sections.push(buildBroadcastResultSection("Yuborib bo'lmadi:", result.failed));
+  }
+
+  const combinedMessage = [summary, ...sections].join('\n\n');
+
+  return combinedMessage.length <= BROADCAST_REPORT_MESSAGE_LIMIT
+    ? [combinedMessage]
+    : [summary, ...sections];
 }
 
 function buildBroadcastConfirmText(text, userCount) {
@@ -2431,22 +2478,22 @@ async function handleBroadcastMessageInput(bot, chatId, telegramId, from, text) 
 
 async function sendBroadcastToUsers(bot, text) {
   const recipients = getBroadcastRecipients(await userService.getAllUsers());
-  let successCount = 0;
-  let failedCount = 0;
+  const successful = [];
+  const failed = [];
 
-  for (const telegramId of recipients) {
+  for (const recipient of recipients) {
     try {
-      await bot.sendMessage(telegramId, text);
-      successCount += 1;
+      await bot.sendMessage(recipient.telegramId, text);
+      successful.push(recipient);
     } catch (error) {
-      failedCount += 1;
-      console.error(`Broadcast yuborishda xato: telegram_id=${telegramId}`, error.message || error);
+      failed.push(recipient);
+      console.error(`Broadcast yuborishda xato: telegram_id=${recipient.telegramId}`, error.message || error);
     }
 
     await sleep(BROADCAST_SEND_DELAY_MS);
   }
 
-  return { successCount, failedCount };
+  return { successful, failed };
 }
 
 async function handleBroadcastCallback(bot, query, callbackKey) {
@@ -2484,12 +2531,12 @@ async function handleBroadcastCallback(bot, query, callbackKey) {
   await bot.sendMessage(chatId, "📢 Xabar yuborilmoqda...", MAIN_KEYBOARD);
 
   const result = await sendBroadcastToUsers(bot, state.data.text);
+  const resultMessages = buildBroadcastResultMessages(result);
 
-  await bot.sendMessage(
-    chatId,
-    `✅ Xabar yuborildi: ${result.successCount} kishiga muvaffaqiyatli, ${result.failedCount} kishiga yuborib bo'lmadi (bot bloklangan yoki xato).`,
-    MAIN_KEYBOARD
-  );
+  for (const [index, resultMessage] of resultMessages.entries()) {
+    const options = index === resultMessages.length - 1 ? MAIN_KEYBOARD : undefined;
+    await bot.sendMessage(chatId, resultMessage, options);
+  }
 }
 
 async function handleExpenseText(bot, chatId, user, text) {
