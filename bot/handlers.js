@@ -77,7 +77,8 @@ const RATE_LIMIT_COUNT = Number.isInteger(configuredRateLimitCount) && configure
 const FREE_DAILY_LIMIT = 15;
 const PREMIUM_DAILY_LIMIT = 50;
 const EXCEL_EXPORT_LIMIT_COST = 5;
-const AI_ANALYSIS_LIMIT_COST = 5;
+const FREE_AI_ANALYSIS_LIMIT_COST = 3;
+const PREMIUM_AI_ANALYSIS_LIMIT_COST = 5;
 const FREE_DAILY_VOICE_LIMIT = 2;
 const PREMIUM_DAILY_VOICE_LIMIT = 10;
 const ADMIN_USERS_PAGE_SIZE = 10;
@@ -582,6 +583,12 @@ function getUserDailyLimit(user) {
   }
 
   return user?.is_premium ? PREMIUM_DAILY_LIMIT : FREE_DAILY_LIMIT;
+}
+
+function getAiAnalysisLimitCost(user) {
+  return user?.is_premium
+    ? PREMIUM_AI_ANALYSIS_LIMIT_COST
+    : FREE_AI_ANALYSIS_LIMIT_COST;
 }
 
 function getUserDailyVoiceLimit(user) {
@@ -1571,13 +1578,18 @@ async function handleReport(bot, chatId, user) {
 
 async function handleAnalysis(bot, chatId, user) {
   const dailyLimit = getUserDailyLimit(user);
+  const analysisLimitCost = getAiAnalysisLimitCost(user);
   const todayUsageCount = userService.getDailyUsageCount(user, 'text');
   const remainingLimit = Math.max(0, dailyLimit - todayUsageCount);
 
-  if (remainingLimit < AI_ANALYSIS_LIMIT_COST) {
+  if (remainingLimit < analysisLimitCost) {
+    const retryText = user?.is_premium
+      ? "Ertaga qayta urinib ko'ring."
+      : "Ertaga qayta urinib ko'ring yoki /premium_narxi orqali premium tarifga o'ting.";
+
     await bot.sendMessage(
       chatId,
-      `AI Tahlil uchun ${AI_ANALYSIS_LIMIT_COST} ta limit kerak, lekin sizda bugun faqat ${remainingLimit} ta qoldi. Ertaga qayta urinib ko'ring.`,
+      `AI Tahlil uchun ${analysisLimitCost} ta limit kerak, lekin sizda bugun faqat ${remainingLimit} ta qoldi (jami ${dailyLimit} tadan). ${retryText}`,
       MAIN_KEYBOARD
     );
     return;
@@ -1587,7 +1599,7 @@ async function handleAnalysis(bot, chatId, user) {
     await bot.sendMessage(chatId, "Tahlil tayyorlanmoqda, bir necha soniya kuting...", MAIN_KEYBOARD);
     const adviceData = await expenseService.getAdviceData(user);
     const advice = await generateAdvice(adviceData);
-    await userService.incrementDailyUsage(user, AI_ANALYSIS_LIMIT_COST, 'text');
+    await userService.incrementDailyUsage(user, analysisLimitCost, 'text');
     await sendLongMessage(bot, chatId, advice || "Hozir tahlil qila olmadim, birozdan keyin qayta urinib ko'ring");
   } catch (error) {
     console.error('Tahlil tayyorlashda xato:', error);
