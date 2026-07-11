@@ -909,7 +909,7 @@ function formatBudgetPlanProgressItem(item, index) {
   return `${index + 1}. ${formatBudgetProgressLine(item)}`;
 }
 
-function buildBudgetPlanViewText(progress) {
+function buildBudgetPlanViewText(progress, salary = 0) {
   const unplannedLines = (progress.unplannedItems || []).map((item) => (
     `- ${item.category} — ${formatMoney(item.spent)}`
   ));
@@ -929,7 +929,12 @@ function buildBudgetPlanViewText(progress) {
   const totalPercent = totalPlanned > 0 ? Math.round((totalSpent / totalPlanned) * 100) : 0;
   const totalStatus = totalSpent > totalPlanned
     ? `⚠️ Rejadan ${formatMoney(totalSpent - totalPlanned)}ga oshib ketdingiz`
-    : `✅ Qolgan: ${formatMoney(totalPlanned - totalSpent)}`;
+    : `✅ Reja bo'yicha qolgan: ${formatMoney(totalPlanned - totalSpent)}`;
+  const currentSalary = Number(salary || 0);
+  const outsidePlanAmount = currentSalary - totalPlanned;
+  const outsidePlanStatus = outsidePlanAmount < 0
+    ? `⚠️ Rejangiz maoshingizdan ${formatMoney(Math.abs(outsidePlanAmount))}ga ko'p! Byudjetingizni qayta ko'rib chiqing.`
+    : `📈 Rejadan tashqari qoladigan: ${formatMoney(outsidePlanAmount)}`;
 
   return [
     `📆 Joriy reja (${formatBudgetPlanDateRange(progress.plan.start_date, progress.plan.end_date)}):`,
@@ -942,7 +947,10 @@ function buildBudgetPlanViewText(progress) {
     '━━━━━━━━━━━━━━━',
     `📊 Jami reja: ${formatMoney(totalPlanned)}`,
     `💸 Jami sarflangan: ${formatMoney(totalSpent)} (${totalPercent}%)`,
-    totalStatus
+    totalStatus,
+    '',
+    `💰 Maoshingiz: ${formatMoney(currentSalary)}`,
+    outsidePlanStatus
   ].filter((line) => line !== null).join('\n');
 }
 
@@ -1940,7 +1948,7 @@ async function showBudgetPlan(bot, chatId, telegramId, user, plan = null) {
     }))
   };
   setUserState(telegramId, 'awaiting_budget_plan_action', stateData);
-  await bot.sendMessage(chatId, buildBudgetPlanViewText(progress), getBudgetPlanManageMarkup(telegramId));
+  await bot.sendMessage(chatId, buildBudgetPlanViewText(progress, user.current_salary), getBudgetPlanManageMarkup(telegramId));
 }
 
 async function handleBudgetPlanViewOrStart(bot, chatId, telegramId, user) {
