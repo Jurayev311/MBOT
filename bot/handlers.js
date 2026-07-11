@@ -909,7 +909,7 @@ function formatBudgetPlanProgressItem(item, index) {
   return `${index + 1}. ${formatBudgetProgressLine(item)}`;
 }
 
-function buildBudgetPlanViewText(progress, salary = 0) {
+function buildBudgetPlanViewText(progress, salary = 0, realTotalExpense = 0) {
   const unplannedLines = (progress.unplannedItems || []).map((item) => (
     `- ${item.category} — ${formatMoney(item.spent)}`
   ));
@@ -931,10 +931,8 @@ function buildBudgetPlanViewText(progress, salary = 0) {
     ? `⚠️ Rejadan ${formatMoney(totalSpent - totalPlanned)}ga oshib ketdingiz`
     : `✅ Reja bo'yicha qolgan: ${formatMoney(totalPlanned - totalSpent)}`;
   const currentSalary = Number(salary || 0);
-  const outsidePlanAmount = currentSalary - totalPlanned;
-  const outsidePlanStatus = outsidePlanAmount < 0
-    ? `⚠️ Rejangiz maoshingizdan ${formatMoney(Math.abs(outsidePlanAmount))}ga ko'p! Byudjetingizni qayta ko'rib chiqing.`
-    : `📈 Rejadan tashqari qoladigan: ${formatMoney(outsidePlanAmount)}`;
+  const realExpenseTotal = Number(realTotalExpense || 0);
+  const realBalance = currentSalary - realExpenseTotal;
 
   return [
     `📆 Joriy reja (${formatBudgetPlanDateRange(progress.plan.start_date, progress.plan.end_date)}):`,
@@ -950,7 +948,8 @@ function buildBudgetPlanViewText(progress, salary = 0) {
     totalStatus,
     '',
     `💰 Maoshingiz: ${formatMoney(currentSalary)}`,
-    outsidePlanStatus
+    `💸 Haqiqiy jami xarajat: ${formatMoney(realExpenseTotal)}`,
+    `✅ Real qolgan balans: ${formatMoney(realBalance)}`
   ].filter((line) => line !== null).join('\n');
 }
 
@@ -1936,7 +1935,11 @@ async function showBudgetPlan(bot, chatId, telegramId, user, plan = null) {
     return;
   }
 
-  const progress = await budgetPlanService.getBudgetPlanProgress(user.id, activePlan);
+  const month = user.current_month || userService.getMonthKey();
+  const [progress, monthlySummary] = await Promise.all([
+    budgetPlanService.getBudgetPlanProgress(user.id, activePlan),
+    expenseService.getMonthlySummary(user.id, month)
+  ]);
   const stateData = {
     userId: user.id,
     planId: progress.plan.id,
@@ -1948,7 +1951,11 @@ async function showBudgetPlan(bot, chatId, telegramId, user, plan = null) {
     }))
   };
   setUserState(telegramId, 'awaiting_budget_plan_action', stateData);
-  await bot.sendMessage(chatId, buildBudgetPlanViewText(progress, user.current_salary), getBudgetPlanManageMarkup(telegramId));
+  await bot.sendMessage(
+    chatId,
+    buildBudgetPlanViewText(progress, user.current_salary, monthlySummary.totalSpent),
+    getBudgetPlanManageMarkup(telegramId)
+  );
 }
 
 async function handleBudgetPlanViewOrStart(bot, chatId, telegramId, user) {
