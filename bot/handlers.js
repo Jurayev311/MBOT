@@ -940,6 +940,13 @@ function formatBudgetStatus(spent, planned) {
     };
   }
 
+  if (spentAmount === plannedAmount) {
+    return {
+      icon: '✅',
+      text: `${formatMoney(0)} qoldi`
+    };
+  }
+
   return {
     icon: '📆',
     text: `${formatMoney(plannedAmount - spentAmount)} qoldi`
