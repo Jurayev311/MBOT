@@ -68,7 +68,10 @@ function getSettingsInlineKeyboard(user) {
 const PAYMENT_START_CALLBACK = 'payment_send_receipt';
 const PAYMENT_CONFIRM_PREFIX = 'payment_confirm_';
 const PAYMENT_REJECT_PREFIX = 'payment_reject_';
+const BROADCAST_CONFIRM_CALLBACK = 'broadcast_confirm';
+const BROADCAST_CANCEL_CALLBACK = 'broadcast_cancel';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const BROADCAST_SEND_DELAY_MS = 75;
 const DEFAULT_RATE_LIMIT_COUNT = 20;
 const configuredRateLimitCount = Number(process.env.RATE_LIMIT_PER_MINUTE);
 const RATE_LIMIT_COUNT = Number.isInteger(configuredRateLimitCount) && configuredRateLimitCount > 0
@@ -240,6 +243,29 @@ function getPaymentStartMarkup() {
     reply_markup: {
       inline_keyboard: [
         [{ text: "💳 To'lov qildim, chek yuboraman", callback_data: PAYMENT_START_CALLBACK }]
+      ]
+    }
+  };
+}
+
+function getBroadcastCancelMarkup() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '❌ Bekor qilish', callback_data: BROADCAST_CANCEL_CALLBACK }]
+      ]
+    }
+  };
+}
+
+function getBroadcastConfirmMarkup() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '✅ Ha, yuborish', callback_data: BROADCAST_CONFIRM_CALLBACK },
+          { text: '❌ Bekor qilish', callback_data: BROADCAST_CANCEL_CALLBACK }
+        ]
       ]
     }
   };
@@ -641,6 +667,10 @@ function isRateLimited(telegramId) {
 
   bucket.count += 1;
   return bucket.count > RATE_LIMIT_COUNT;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parsePositiveAmount(text) {
@@ -2307,6 +2337,137 @@ async function handleStatsCommand(bot, msg) {
   }
 }
 
+function getBroadcastRecipients(users = []) {
+  const telegramIds = users
+    .map((user) => String(user?.telegram_id || '').trim())
+    .filter((telegramId) => /^\d+$/.test(telegramId));
+
+  return [...new Set(telegramIds)];
+}
+
+function buildBroadcastConfirmText(text, userCount) {
+  return [
+    `📢 Quyidagi xabar BARCHA foydalanuvchilarga (${userCount} kishi) yuborilsin:`,
+    '',
+    '---',
+    text,
+    '---',
+    '',
+    'Tasdiqlaysizmi?'
+  ].join('\n');
+}
+
+async function handleBroadcastCommand(bot, msg) {
+  if (!isAdminUser(msg.from)) {
+    return;
+  }
+
+  const chatId = getChatId(msg);
+  const telegramId = getTelegramId(msg.from);
+
+  clearUserState(telegramId);
+  setUserState(telegramId, 'awaiting_broadcast_message');
+  await bot.sendMessage(
+    chatId,
+    "📢 Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yozing:",
+    getBroadcastCancelMarkup()
+  );
+}
+
+async function handleBroadcastMessageInput(bot, chatId, telegramId, from, text) {
+  if (!isAdminUser(from)) {
+    clearUserState(telegramId);
+    return;
+  }
+
+  const broadcastText = String(text || '').trim();
+
+  if (!broadcastText) {
+    await bot.sendMessage(chatId, "Xabar matni bo'sh bo'lmasin.", getBroadcastCancelMarkup());
+    return;
+  }
+
+  if (broadcastText.length > 3500) {
+    await bot.sendMessage(chatId, "Xabar juda uzun. 3500 belgidan oshirmay yuboring.", getBroadcastCancelMarkup());
+    return;
+  }
+
+  const recipients = getBroadcastRecipients(await userService.getAllUsers());
+
+  setUserState(telegramId, 'awaiting_broadcast_confirm', {
+    text: broadcastText,
+    userCount: recipients.length
+  });
+  await bot.sendMessage(
+    chatId,
+    buildBroadcastConfirmText(broadcastText, recipients.length),
+    getBroadcastConfirmMarkup()
+  );
+}
+
+async function sendBroadcastToUsers(bot, text) {
+  const recipients = getBroadcastRecipients(await userService.getAllUsers());
+  let successCount = 0;
+  let failedCount = 0;
+
+  for (const telegramId of recipients) {
+    try {
+      await bot.sendMessage(telegramId, text);
+      successCount += 1;
+    } catch (error) {
+      failedCount += 1;
+      console.error(`Broadcast yuborishda xato: telegram_id=${telegramId}`, error.message || error);
+    }
+
+    await sleep(BROADCAST_SEND_DELAY_MS);
+  }
+
+  return { successCount, failedCount };
+}
+
+async function handleBroadcastCallback(bot, query, callbackKey) {
+  const chatId = query.message.chat.id;
+  const telegramId = getTelegramId(query.from);
+
+  if (!isAdminUser(query.from)) {
+    await answerCallback(bot, query, 'Bu tugma siz uchun emas.');
+    return;
+  }
+
+  if (isCallbackMessageConsumed(callbackKey)) {
+    await answerCallback(bot, query, "Bu so'rov allaqachon bajarilgan");
+    return;
+  }
+
+  await answerCallback(bot, query);
+  await consumeCallbackMessage(bot, query, callbackKey);
+
+  if (query.data === BROADCAST_CANCEL_CALLBACK) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, "Ommaviy xabar bekor qilindi.", MAIN_KEYBOARD);
+    return;
+  }
+
+  const state = getUserState(telegramId);
+
+  if (state?.type !== 'awaiting_broadcast_confirm' || !state.data?.text) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, "Xabar topilmadi yoki sessiya eskirgan. /xabar orqali qayta boshlang.", MAIN_KEYBOARD);
+    return;
+  }
+
+  clearUserState(telegramId);
+  await bot.sendMessage(chatId, "📢 Xabar yuborilmoqda...", MAIN_KEYBOARD);
+
+  const result = await sendBroadcastToUsers(bot, state.data.text);
+
+  await bot.sendMessage(
+    chatId,
+    `✅ Xabar yuborildi: ${result.successCount} kishiga muvaffaqiyatli, ${result.failedCount} kishiga yuborib bo'lmadi (bot bloklangan yoki xato).`,
+    MAIN_KEYBOARD
+  );
+}
+
 async function handleExpenseText(bot, chatId, user, text) {
   const validation = validateExpenseText(text);
   const cleanText = validation.text;
@@ -2782,6 +2943,11 @@ async function handleCallback(bot, query) {
       return;
     }
 
+    if (query.data === BROADCAST_CONFIRM_CALLBACK || query.data === BROADCAST_CANCEL_CALLBACK) {
+      await handleBroadcastCallback(bot, query, callbackKey);
+      return;
+    }
+
     const adminStatsCallback = parseAdminStatsCallback(query.data);
 
     if (adminStatsCallback) {
@@ -3131,6 +3297,25 @@ async function handleMessage(bot, msg) {
       return;
     }
 
+    if (state?.type === 'awaiting_broadcast_message') {
+      await handleBroadcastMessageInput(bot, chatId, telegramId, msg.from, normalizedText);
+      return;
+    }
+
+    if (state?.type === 'awaiting_broadcast_confirm') {
+      if (!isAdminUser(msg.from)) {
+        clearUserState(telegramId);
+        return;
+      }
+
+      await bot.sendMessage(
+        chatId,
+        "Yuborish uchun tasdiqlash tugmasini bosing yoki bekor qiling.",
+        getBroadcastConfirmMarkup()
+      );
+      return;
+    }
+
     if (state?.type === 'awaiting_start_name') {
       if (!normalizedText) {
         await bot.sendMessage(chatId, buildNamePromptText(), MAIN_KEYBOARD);
@@ -3246,6 +3431,7 @@ async function handleMessage(bot, msg) {
 function registerHandlers(bot) {
   bot.onText(/^\/start$/, (msg) => handleStart(bot, msg));
   bot.onText(/^\/stats$/, (msg) => handleStatsCommand(bot, msg));
+  bot.onText(/^\/(?:xabar|broadcast)$/, (msg) => handleBroadcastCommand(bot, msg));
   bot.onText(/^\/premium_narxi$/, (msg) => handlePremiumPriceCommand(bot, msg));
   bot.onText(/^\/premium\s+(\d+)$/, (msg, match) => handlePremiumCommand(bot, msg, match, true));
   bot.onText(/^\/removepremium\s+(\d+)$/, (msg, match) => handlePremiumCommand(bot, msg, match, false));
