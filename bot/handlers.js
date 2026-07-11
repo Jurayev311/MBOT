@@ -715,11 +715,17 @@ function getTopExpenseLines(expenses = []) {
     .map((expense, index) => `${index + 1}. ${formatReportExpenseNote(expense)} — ${formatMoney(expense.amount)}`);
 }
 
+function calculateUserBalance(salary, summary = {}) {
+  return Number(salary || 0)
+    - Number(summary.totalSpent || 0)
+    + Number(summary.totalIncome || 0);
+}
+
 function formatReport(user, summary) {
   const salary = Number(user.current_salary || 0);
   const totalSpent = Number(summary.totalSpent || 0);
   const totalIncome = Number(summary.totalIncome || 0);
-  const balance = salary - totalSpent + totalIncome;
+  const balance = calculateUserBalance(salary, summary);
   const categoryLines = Object.entries(summary.byCategory)
     .filter(([, amount]) => Number(amount) > 0)
     .map(([category, amount]) => `- ${category}: ${formatMoney(amount)}`);
@@ -909,7 +915,7 @@ function formatBudgetPlanProgressItem(item, index) {
   return `${index + 1}. ${formatBudgetProgressLine(item)}`;
 }
 
-function buildBudgetPlanViewText(progress, salary = 0, realTotalExpense = 0) {
+function buildBudgetPlanViewText(progress, salary = 0, monthlySummary = {}) {
   const unplannedLines = (progress.unplannedItems || []).map((item) => (
     `- ${item.category} — ${formatMoney(item.spent)}`
   ));
@@ -931,8 +937,9 @@ function buildBudgetPlanViewText(progress, salary = 0, realTotalExpense = 0) {
     ? `⚠️ Rejadan ${formatMoney(totalSpent - totalPlanned)}ga oshib ketdingiz`
     : `✅ Reja bo'yicha qolgan: ${formatMoney(totalPlanned - totalSpent)}`;
   const currentSalary = Number(salary || 0);
-  const realExpenseTotal = Number(realTotalExpense || 0);
-  const realBalance = currentSalary - realExpenseTotal;
+  const realExpenseTotal = Number(monthlySummary.totalSpent || 0);
+  const realIncomeTotal = Number(monthlySummary.totalIncome || 0);
+  const realBalance = calculateUserBalance(currentSalary, monthlySummary);
 
   return [
     `📆 Joriy reja (${formatBudgetPlanDateRange(progress.plan.start_date, progress.plan.end_date)}):`,
@@ -948,6 +955,7 @@ function buildBudgetPlanViewText(progress, salary = 0, realTotalExpense = 0) {
     totalStatus,
     '',
     `💰 Maoshingiz: ${formatMoney(currentSalary)}`,
+    `➕ Qo'shimcha kirim: ${formatMoney(realIncomeTotal)}`,
     `💸 Haqiqiy jami xarajat: ${formatMoney(realExpenseTotal)}`,
     `✅ Real qolgan balans: ${formatMoney(realBalance)}`
   ].filter((line) => line !== null).join('\n');
@@ -1382,9 +1390,7 @@ function buildSavedExpensesText(savedExpenses, balance, skippedCount = 0, option
 
 async function getCurrentBalance(user, month = user?.current_month || userService.getMonthKey()) {
   const summary = await expenseService.getMonthlySummary(user.id, month);
-  return Number(user.current_salary || 0)
-    - Number(summary.totalSpent || 0)
-    + Number(summary.totalIncome || 0);
+  return calculateUserBalance(user.current_salary, summary);
 }
 
 function formatExcelDate(dateInput) {
@@ -1953,7 +1959,7 @@ async function showBudgetPlan(bot, chatId, telegramId, user, plan = null) {
   setUserState(telegramId, 'awaiting_budget_plan_action', stateData);
   await bot.sendMessage(
     chatId,
-    buildBudgetPlanViewText(progress, user.current_salary, monthlySummary.totalSpent),
+    buildBudgetPlanViewText(progress, user.current_salary, monthlySummary),
     getBudgetPlanManageMarkup(telegramId)
   );
 }
@@ -2364,9 +2370,7 @@ async function handleExpenseText(bot, chatId, user, text) {
     await userService.incrementDailyUsage(user, savedExpenses.length, 'text');
 
     const summary = await expenseService.getMonthlySummary(user.id, month);
-    const balance = Number(user.current_salary || 0)
-      - Number(summary.totalSpent || 0)
-      + Number(summary.totalIncome || 0);
+    const balance = calculateUserBalance(user.current_salary, summary);
     const budgetWarnings = await budgetPlanService.getBudgetWarningsForExpenses(user.id, savedExpenses);
 
     const messageOptions = expenses.length === 1 && savedExpenses.length === 1 && skippedCount === 0
@@ -2457,9 +2461,7 @@ async function handleVoice(bot, msg) {
     const savedExpense = await expenseService.createExpense(user.id, parsedExpense, month, 'voice');
     await userService.incrementDailyUsage(user, 1, 'voice');
     const summary = await expenseService.getMonthlySummary(user.id, month);
-    const balance = Number(user.current_salary || 0)
-      - Number(summary.totalSpent || 0)
-      + Number(summary.totalIncome || 0);
+    const balance = calculateUserBalance(user.current_salary, summary);
     const budgetWarnings = await budgetPlanService.getBudgetWarningsForExpenses(user.id, [savedExpense]);
 
     await bot.sendMessage(
