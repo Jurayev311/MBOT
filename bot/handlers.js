@@ -77,6 +77,7 @@ const RATE_LIMIT_COUNT = Number.isInteger(configuredRateLimitCount) && configure
 const FREE_DAILY_LIMIT = 15;
 const PREMIUM_DAILY_LIMIT = 50;
 const EXCEL_EXPORT_LIMIT_COST = 5;
+const AI_ANALYSIS_LIMIT_COST = 5;
 const FREE_DAILY_VOICE_LIMIT = 2;
 const PREMIUM_DAILY_VOICE_LIMIT = 10;
 const ADMIN_USERS_PAGE_SIZE = 10;
@@ -1569,10 +1570,24 @@ async function handleReport(bot, chatId, user) {
 }
 
 async function handleAnalysis(bot, chatId, user) {
+  const dailyLimit = getUserDailyLimit(user);
+  const todayUsageCount = userService.getDailyUsageCount(user, 'text');
+  const remainingLimit = Math.max(0, dailyLimit - todayUsageCount);
+
+  if (remainingLimit < AI_ANALYSIS_LIMIT_COST) {
+    await bot.sendMessage(
+      chatId,
+      `AI Tahlil uchun ${AI_ANALYSIS_LIMIT_COST} ta limit kerak, lekin sizda bugun faqat ${remainingLimit} ta qoldi. Ertaga qayta urinib ko'ring.`,
+      MAIN_KEYBOARD
+    );
+    return;
+  }
+
   try {
     await bot.sendMessage(chatId, "Tahlil tayyorlanmoqda, bir necha soniya kuting...", MAIN_KEYBOARD);
     const adviceData = await expenseService.getAdviceData(user);
     const advice = await generateAdvice(adviceData);
+    await userService.incrementDailyUsage(user, AI_ANALYSIS_LIMIT_COST, 'text');
     await sendLongMessage(bot, chatId, advice || "Hozir tahlil qila olmadim, birozdan keyin qayta urinib ko'ring");
   } catch (error) {
     console.error('Tahlil tayyorlashda xato:', error);
