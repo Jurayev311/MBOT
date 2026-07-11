@@ -845,12 +845,20 @@ function buildBudgetPlanSavedText(plan, salary) {
   ].join('\n');
 }
 
-function formatBudgetPlanProgressItem(item, index) {
-  const overText = Number(item.overAmount || 0) > 0
-    ? `, +${formatMoney(item.overAmount)} oshgan ⚠️`
-    : '';
+function formatBudgetProgressLine(item) {
+  const plannedAmount = Number(item.plannedAmount || 0);
+  const isLimitReached = Boolean(item.isLimitReached)
+    || (plannedAmount > 0 && Number(item.spent || 0) >= plannedAmount);
+  const statusText = isLimitReached
+    ? `${formatMoney(item.overAmount)} oshgan`
+    : `${formatMoney(item.remainingAmount)} qoldi`;
+  const prefix = isLimitReached ? '⚠️ Reja:' : '📆 Reja:';
 
-  return `${index + 1}. ${item.category} — ${formatMoney(item.plannedAmount)} (sarflandi: ${formatMoney(item.spent)}${overText})`;
+  return `${prefix} ${item.category} ${formatMoney(item.spent)} / ${formatMoney(item.plannedAmount)} (${item.percent}%, ${statusText})`;
+}
+
+function formatBudgetPlanProgressItem(item, index) {
+  return `${index + 1}. ${formatBudgetProgressLine(item)}`;
 }
 
 function buildBudgetPlanViewText(progress) {
@@ -873,13 +881,7 @@ function buildBudgetPlanViewText(progress) {
 }
 
 function formatBudgetWarningLines(warnings = []) {
-  return warnings.map((warning) => {
-    if (warning.type === 'unplanned') {
-      return `⚠️ ${warning.category} rejangizda yo'q: ${formatMoney(warning.spent)} rejadan tashqari sarflandi.`;
-    }
-
-    return `⚠️ ${warning.category} rejangiz ${formatMoney(warning.plannedAmount)} edi, ${formatMoney(warning.overAmount)}ga oshib ketdingiz.`;
-  });
+  return warnings.map(formatBudgetProgressLine);
 }
 
 function buildNamePromptText() {

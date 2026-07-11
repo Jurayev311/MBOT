@@ -491,12 +491,20 @@ async function getBudgetPlanProgress(userId, plan) {
   const items = (planWithItems.items || []).map((item) => {
     const plannedAmount = Number(item.planned_amount || 0);
     const spent = Number(spentByCategory[item.category] || 0);
+    const isLimitReached = plannedAmount > 0 && spent >= plannedAmount;
+    const rawPercent = plannedAmount > 0 ? (spent / plannedAmount) * 100 : 0;
+    const percent = isLimitReached
+      ? Math.round(rawPercent)
+      : Math.min(99, Math.round(rawPercent));
 
     return {
       id: item.id,
       category: item.category,
       plannedAmount,
       spent,
+      percent,
+      isLimitReached,
+      remainingAmount: Math.max(0, plannedAmount - spent),
       overAmount: Math.max(0, spent - plannedAmount)
     };
   });
@@ -530,24 +538,18 @@ async function getBudgetWarningsForExpenses(userId, expenses = [], date = new Da
       .map((expense) => expense.category)
   );
 
-  const plannedWarnings = progress.items
-    .filter((item) => expenseCategories.has(item.category) && item.overAmount > 0)
+  return progress.items
+    .filter((item) => expenseCategories.has(item.category))
     .map((item) => ({
-      type: 'over_limit',
+      type: item.isLimitReached ? 'limit_reached' : 'progress',
       category: item.category,
       plannedAmount: item.plannedAmount,
       spent: item.spent,
+      percent: item.percent,
+      isLimitReached: item.isLimitReached,
+      remainingAmount: item.remainingAmount,
       overAmount: item.overAmount
     }));
-  const unplannedWarnings = progress.unplannedItems
-    .filter((item) => expenseCategories.has(item.category))
-    .map((item) => ({
-      type: 'unplanned',
-      category: item.category,
-      spent: item.spent
-    }));
-
-  return [...plannedWarnings, ...unplannedWarnings];
 }
 
 async function getExpiredActiveBudgetPlan(userId, date = new Date()) {
