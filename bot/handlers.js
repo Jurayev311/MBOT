@@ -929,16 +929,27 @@ function buildBudgetPlanSavedText(plan, salary) {
   ].join('\n');
 }
 
-function formatBudgetProgressLine(item) {
-  const plannedAmount = Number(item.plannedAmount || 0);
-  const isLimitReached = Boolean(item.isLimitReached)
-    || (plannedAmount > 0 && Number(item.spent || 0) >= plannedAmount);
-  const statusText = isLimitReached
-    ? `${formatMoney(item.overAmount)} oshgan`
-    : `${formatMoney(item.remainingAmount)} qoldi`;
-  const prefix = isLimitReached ? '⚠️ Reja:' : '📆 Reja:';
+function formatBudgetStatus(spent, planned) {
+  const spentAmount = Math.max(0, Number(spent) || 0);
+  const plannedAmount = Math.max(0, Number(planned) || 0);
 
-  return `${prefix} ${item.category} ${formatMoney(item.spent)} / ${formatMoney(item.plannedAmount)} (${item.percent}%, ${statusText})`;
+  if (spentAmount > plannedAmount) {
+    return {
+      icon: '⚠️',
+      text: `${formatMoney(spentAmount - plannedAmount)} oshgan`
+    };
+  }
+
+  return {
+    icon: '📆',
+    text: `${formatMoney(plannedAmount - spentAmount)} qoldi`
+  };
+}
+
+function formatBudgetProgressLine(item) {
+  const status = formatBudgetStatus(item.spent, item.plannedAmount);
+
+  return `${status.icon} Reja: ${item.category} ${formatMoney(item.spent)} / ${formatMoney(item.plannedAmount)} (${item.percent}%, ${status.text})`;
 }
 
 function formatBudgetPlanProgressItem(item, index) {
@@ -1337,6 +1348,12 @@ function isUnusualExpense(expense, previousExpenses = []) {
   const average = total / previousExpenses.length;
 
   return average > 0 && Number(expense.amount || 0) >= average * 3;
+}
+
+function hasUnplannedUnusualExpense(unusualExpenses = [], budgetWarnings = []) {
+  const plannedCategories = new Set(budgetWarnings.map((warning) => warning.category));
+
+  return unusualExpenses.some((expense) => !plannedCategories.has(expense.category));
 }
 
 function getExpenseItems(expenses = []) {
@@ -2516,11 +2533,11 @@ async function handleExpenseText(bot, chatId, user, text) {
     const summaryBeforeSave = await expenseService.getMonthlySummary(user.id, month);
     const previousExpenses = getExpenseItems(summaryBeforeSave.expenses);
     const savedExpenses = [];
-    let hasUnusualExpense = false;
+    const unusualExpenses = [];
 
     for (const expense of expensesToSave) {
       if (isUnusualExpense(expense, previousExpenses)) {
-        hasUnusualExpense = true;
+        unusualExpenses.push(expense);
       }
 
       const savedExpense = await expenseService.createExpense(user.id, expense, month);
@@ -2536,6 +2553,7 @@ async function handleExpenseText(bot, chatId, user, text) {
     const summary = await expenseService.getMonthlySummary(user.id, month);
     const balance = calculateUserBalance(user.current_salary, summary);
     const budgetWarnings = await budgetPlanService.getBudgetWarningsForExpenses(user.id, savedExpenses);
+    const hasUnusualExpense = hasUnplannedUnusualExpense(unusualExpenses, budgetWarnings);
 
     const messageOptions = expenses.length === 1 && savedExpenses.length === 1 && skippedCount === 0
       ? getExpenseActionMarkup(savedExpenses[0], user.telegram_id)
@@ -2621,12 +2639,13 @@ async function handleVoice(bot, msg) {
     const month = user.current_month || userService.getMonthKey();
     const summaryBeforeSave = await expenseService.getMonthlySummary(user.id, month);
     const previousExpenses = getExpenseItems(summaryBeforeSave.expenses);
-    const hasUnusualExpense = isUnusualExpense(parsedExpense, previousExpenses);
+    const unusualExpenses = isUnusualExpense(parsedExpense, previousExpenses) ? [parsedExpense] : [];
     const savedExpense = await expenseService.createExpense(user.id, parsedExpense, month, 'voice');
     await userService.incrementDailyUsage(user, 1, 'voice');
     const summary = await expenseService.getMonthlySummary(user.id, month);
     const balance = calculateUserBalance(user.current_salary, summary);
     const budgetWarnings = await budgetPlanService.getBudgetWarningsForExpenses(user.id, [savedExpense]);
+    const hasUnusualExpense = hasUnplannedUnusualExpense(unusualExpenses, budgetWarnings);
 
     await bot.sendMessage(
       chatId,
