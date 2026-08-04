@@ -36,6 +36,9 @@ const BUDGET_PLAN_DATE_RETRY_PREFIX = 'budget_date_retry_';
 const BUDGET_PLAN_MANAGE_EDIT_PREFIX = 'budget_manage_edit_';
 const BUDGET_PLAN_MANAGE_ADD_PREFIX = 'budget_manage_add_';
 const BUDGET_PLAN_MANAGE_DATE_PREFIX = 'budget_manage_date_';
+const BUDGET_PLAN_MANAGE_DELETE_PREFIX = 'budget_manage_delete_';
+const BUDGET_PLAN_DELETE_CONFIRM_PREFIX = 'budget_manage_delete_confirm_';
+const BUDGET_PLAN_DELETE_CANCEL_PREFIX = 'budget_manage_delete_cancel_';
 
 const CLEAR_CONFIRM_INLINE_KEYBOARD = {
   reply_markup: {
@@ -321,11 +324,31 @@ function getBudgetPlanManageMarkup(telegramId) {
           { text: "➕ Yangi band qo'shish", callback_data: `${BUDGET_PLAN_MANAGE_ADD_PREFIX}${telegramId}` }
         ],
         [
-          { text: "📅 Muddatni o'zgartirish", callback_data: `${BUDGET_PLAN_MANAGE_DATE_PREFIX}${telegramId}` }
+          { text: "📅 Muddatni o'zgartirish", callback_data: `${BUDGET_PLAN_MANAGE_DATE_PREFIX}${telegramId}` },
+          { text: "🗑️ Rejani o'chirish", callback_data: `${BUDGET_PLAN_MANAGE_DELETE_PREFIX}${telegramId}` }
         ]
       ]
     }
   };
+}
+
+function getBudgetPlanDeleteConfirmMarkup(telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: "Ha, o'chirish", callback_data: `${BUDGET_PLAN_DELETE_CONFIRM_PREFIX}${telegramId}` },
+          { text: 'Bekor qilish', callback_data: `${BUDGET_PLAN_DELETE_CANCEL_PREFIX}${telegramId}` }
+        ]
+      ]
+    }
+  };
+}
+
+function buildBudgetPlanDeleteConfirmText() {
+  return [
+    "⚠️ Rejangizni butunlay o'chirmoqchimisiz? Barcha kategoriya va summalar o'chadi, yangi reja tuzishingiz kerak bo'ladi."
+  ].join('\n');
 }
 
 function getPlanGoalCancelMarkup() {
@@ -427,6 +450,33 @@ function parseBudgetPlanManageCallback(data) {
         telegramId: value.slice(prefix.length)
       };
     }
+  }
+
+  if (value.startsWith(BUDGET_PLAN_MANAGE_DELETE_PREFIX)) {
+    return {
+      action: 'delete',
+      telegramId: value.slice(BUDGET_PLAN_MANAGE_DELETE_PREFIX.length)
+    };
+  }
+
+  return null;
+}
+
+function parseBudgetPlanDeleteCallback(data) {
+  const value = String(data || '');
+
+  if (value.startsWith(BUDGET_PLAN_DELETE_CONFIRM_PREFIX)) {
+    return {
+      action: 'deleteConfirm',
+      telegramId: value.slice(BUDGET_PLAN_DELETE_CONFIRM_PREFIX.length)
+    };
+  }
+
+  if (value.startsWith(BUDGET_PLAN_DELETE_CANCEL_PREFIX)) {
+    return {
+      action: 'deleteCancel',
+      telegramId: value.slice(BUDGET_PLAN_DELETE_CANCEL_PREFIX.length)
+    };
   }
 
   return null;
@@ -2131,7 +2181,41 @@ async function handleBudgetPlanManageCallback(bot, query, user, manageCallback) 
     return;
   }
 
+  if (manageCallback.action === 'delete') {
+    await bot.sendMessage(chatId, buildBudgetPlanDeleteConfirmText(), getBudgetPlanDeleteConfirmMarkup(telegramId));
+    return;
+  }
+
   await handleBudgetPlanActionInput(bot, chatId, telegramId, user, stateData, 'sana');
+}
+
+async function handleBudgetPlanDeleteCallback(bot, query, user, deleteCallback) {
+  const chatId = query.message.chat.id;
+  const telegramId = getTelegramId(query.from);
+  const activePlan = await budgetPlanService.getAnyActiveBudgetPlan(user.id);
+
+  if (!activePlan) {
+    clearUserState(telegramId);
+    await bot.sendMessage(chatId, "Sizda faol reja yo'q. Reja tuzishni boshlaymiz.", MAIN_KEYBOARD);
+    await startBudgetPlanSetup(bot, chatId, telegramId);
+    return;
+  }
+
+  if (deleteCallback.action === 'deleteCancel') {
+    await bot.sendMessage(chatId, 'Bekor qilindi.', MAIN_KEYBOARD);
+    return;
+  }
+
+  if (deleteCallback.action === 'deleteConfirm') {
+    await budgetPlanService.closeBudgetPlan(user.id, activePlan.id);
+    clearUserState(telegramId);
+    await bot.sendMessage(
+      chatId,
+      "✅ Rejangiz o'chirildi. Yangi reja tuzish uchun '📆 Rejam' tugmasini bosing yoki rejasiz davom eting.",
+      MAIN_KEYBOARD
+    );
+    return;
+  }
 }
 
 async function handleBudgetPlanAddItemsInput(bot, chatId, telegramId, user, stateData, text) {
@@ -3036,6 +3120,7 @@ async function handleCallback(bot, query) {
 
     const budgetPlanCallback = parseBudgetPlanCallback(query.data);
     const budgetPlanManageCallback = parseBudgetPlanManageCallback(query.data);
+    const budgetPlanDeleteCallback = parseBudgetPlanDeleteCallback(query.data);
 
     if (budgetPlanManageCallback) {
       if (String(budgetPlanManageCallback.telegramId) !== telegramId) {
@@ -3046,6 +3131,19 @@ async function handleCallback(bot, query) {
       await answerCallback(bot, query);
       const user = await userService.ensureUser(query.from);
       await handleBudgetPlanManageCallback(bot, query, user, budgetPlanManageCallback);
+      return;
+    }
+
+    if (budgetPlanDeleteCallback) {
+      if (String(budgetPlanDeleteCallback.telegramId) !== telegramId) {
+        await answerCallback(bot, query, 'Bu tugma siz uchun emas.');
+        return;
+      }
+
+      await answerCallback(bot, query);
+      await consumeCallbackMessage(bot, query, callbackKey);
+      const user = await userService.ensureUser(query.from);
+      await handleBudgetPlanDeleteCallback(bot, query, user, budgetPlanDeleteCallback);
       return;
     }
 
