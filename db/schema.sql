@@ -1,4 +1,4 @@
--- Supabase schema for the Telegram finance AI bot.
+-- PostgreSQL schema for the Telegram finance AI bot (startup paytida avtomatik ishga tushadi).
 create extension if not exists "pgcrypto";
 
 create table if not exists public.users (
@@ -302,72 +302,3 @@ create index if not exists monthly_history_user_month_idx on public.monthly_hist
 create index if not exists budget_plans_user_active_dates_idx on public.budget_plans(user_id, is_active, start_date, end_date);
 create index if not exists budget_plan_items_plan_idx on public.budget_plan_items(budget_plan_id);
 create index if not exists api_usage_log_created_at_idx on public.api_usage_log(created_at desc);
-
-alter table public.users enable row level security;
-alter table public.expenses enable row level security;
-alter table public.monthly_history enable row level security;
-alter table public.budget_plans enable row level security;
-alter table public.budget_plan_items enable row level security;
-alter table public.api_usage_log enable row level security;
-
-revoke all on table public.users from anon, authenticated;
-revoke all on table public.expenses from anon, authenticated;
-revoke all on table public.monthly_history from anon, authenticated;
-revoke all on table public.budget_plans from anon, authenticated;
-revoke all on table public.budget_plan_items from anon, authenticated;
-revoke all on table public.api_usage_log from anon, authenticated;
-
-grant all on table public.users to service_role;
-grant all on table public.expenses to service_role;
-grant all on table public.monthly_history to service_role;
-grant all on table public.budget_plans to service_role;
-grant all on table public.budget_plan_items to service_role;
-grant all on table public.api_usage_log to service_role;
-
-drop policy if exists "service_role_users_all" on public.users;
-create policy "service_role_users_all"
-on public.users
-for all
-to service_role
-using (true)
-with check (true);
-
-drop policy if exists "service_role_expenses_all" on public.expenses;
-create policy "service_role_expenses_all"
-on public.expenses
-for all
-to service_role
-using (true)
-with check (true);
-
-drop policy if exists "service_role_monthly_history_all" on public.monthly_history;
-create policy "service_role_monthly_history_all"
-on public.monthly_history
-for all
-to service_role
-using (true)
-with check (true);
-
-drop policy if exists "service_role_budget_plans_all" on public.budget_plans;
-create policy "service_role_budget_plans_all"
-on public.budget_plans
-for all
-to service_role
-using (true)
-with check (true);
-
-drop policy if exists "service_role_budget_plan_items_all" on public.budget_plan_items;
-create policy "service_role_budget_plan_items_all"
-on public.budget_plan_items
-for all
-to service_role
-using (true)
-with check (true);
-
-drop policy if exists "service_role_api_usage_log_all" on public.api_usage_log;
-create policy "service_role_api_usage_log_all"
-on public.api_usage_log
-for all
-to service_role
-using (true)
-with check (true);

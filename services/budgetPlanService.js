@@ -1,4 +1,4 @@
-const { supabase } = require('../config/db');
+const { query, queryOne } = require('../config/db');
 const { CATEGORIES } = require('./ai');
 const { parseAmount } = require('../utils/parseAmount');
 
@@ -180,6 +180,10 @@ function formatDate(value) {
   return `${day}.${month}.${year}`;
 }
 
+function prefixColumns(columns, alias) {
+  return columns.split(',').map((column) => `${alias}.${column.trim()}`).join(', ');
+}
+
 function normalizeCategory(category) {
   return CATEGORIES.includes(category) && category !== 'Kirim' ? category : 'Boshqa';
 }
@@ -211,18 +215,13 @@ function normalizePlanItems(items = []) {
 }
 
 async function getBudgetPlanItems(planId, userId) {
-  const { data, error } = await supabase
-    .from('budget_plan_items')
-    .select(`${ITEM_SELECT_COLUMNS}, budget_plans!inner(user_id)`)
-    .eq('budget_plan_id', planId)
-    .eq('budget_plans.user_id', userId)
-    .order('category', { ascending: true });
-
-  if (error) {
-    throw error;
-  }
-
-  return data || [];
+  return query(
+    `select ${prefixColumns(ITEM_SELECT_COLUMNS, 'i')} from budget_plan_items i
+     join budget_plans p on p.id = i.budget_plan_id
+     where i.budget_plan_id = $1 and p.user_id = $2
+     order by i.category asc`,
+    [planId, userId]
+  );
 }
 
 async function attachItems(plan) {
@@ -238,50 +237,39 @@ async function attachItems(plan) {
 
 async function getActiveBudgetPlan(userId, date = new Date()) {
   const today = getDateKey(date);
-  const { data, error } = await supabase
-    .from('budget_plans')
-    .select(PLAN_SELECT_COLUMNS)
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .lte('start_date', today)
-    .gte('end_date', today)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
+  const data = await queryOne(
+    `select ${PLAN_SELECT_COLUMNS} from budget_plans
+     where user_id = $1 and is_active = true and start_date <= $2 and end_date >= $2
+     order by created_at desc
+     limit 1`,
+    [userId, today]
+  );
 
   return attachItems(data);
 }
 
 async function getAnyActiveBudgetPlan(userId) {
-  const { data, error } = await supabase
-    .from('budget_plans')
-    .select(PLAN_SELECT_COLUMNS)
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
+  const data = await queryOne(
+    `select ${PLAN_SELECT_COLUMNS} from budget_plans
+     where user_id = $1 and is_active = true
+     order by created_at desc
+     limit 1`,
+    [userId]
+  );
 
   return attachItems(data);
 }
 
 async function closeActiveBudgetPlans(userId) {
-  const { error } = await supabase
-    .from('budget_plans')
-    .update({ is_active: false })
-    .eq('user_id', userId)
-    .eq('is_active', true);
+  await query('update budget_plans set is_active = false where user_id = $1 and is_active = true', [userId]);
+}
 
-  if (error) {
-    throw error;
+async function insertPlanItems(planId, items) {
+  for (const item of items) {
+    await query(
+      'insert into budget_plan_items (budget_plan_id, category, planned_amount) values ($1, $2, $3)',
+      [planId, item.category, item.plannedAmount]
+    );
   }
 }
 
@@ -294,32 +282,14 @@ async function createBudgetPlan(userId, { startDate, endDate, items }) {
 
   await closeActiveBudgetPlans(userId);
 
-  const { data: plan, error: planError } = await supabase
-    .from('budget_plans')
-    .insert({
-      user_id: userId,
-      start_date: startDate,
-      end_date: endDate,
-      is_active: true
-    })
-    .select(PLAN_SELECT_COLUMNS)
-    .single();
+  const plan = await queryOne(
+    `insert into budget_plans (user_id, start_date, end_date, is_active)
+     values ($1, $2, $3, true)
+     returning ${PLAN_SELECT_COLUMNS}`,
+    [userId, startDate, endDate]
+  );
 
-  if (planError) {
-    throw planError;
-  }
-
-  const { error: itemsError } = await supabase
-    .from('budget_plan_items')
-    .insert(normalizedItems.map((item) => ({
-      budget_plan_id: plan.id,
-      category: item.category,
-      planned_amount: item.plannedAmount
-    })));
-
-  if (itemsError) {
-    throw itemsError;
-  }
+  await insertPlanItems(plan.id, normalizedItems);
 
   return attachItems(plan);
 }
@@ -333,17 +303,11 @@ async function addBudgetPlanItems(userId, planId, items) {
     throw emptyError;
   }
 
-  const { data: plan, error: planError } = await supabase
-    .from('budget_plans')
-    .select(PLAN_SELECT_COLUMNS)
-    .eq('id', planId)
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (planError) {
-    throw planError;
-  }
+  const plan = await queryOne(
+    `select ${PLAN_SELECT_COLUMNS} from budget_plans
+     where id = $1 and user_id = $2 and is_active = true`,
+    [planId, userId]
+  );
 
   if (!plan) {
     const notFoundError = new Error('BUDGET_PLAN_NOT_FOUND');
@@ -359,58 +323,31 @@ async function addBudgetPlanItems(userId, planId, items) {
     const currentItem = itemByCategory.get(item.category);
 
     if (!currentItem) {
-      itemsToInsert.push({
-        budget_plan_id: plan.id,
-        category: item.category,
-        planned_amount: item.plannedAmount
-      });
+      itemsToInsert.push(item);
       continue;
     }
 
     const nextAmount = Number(currentItem.planned_amount || 0) + Number(item.plannedAmount || 0);
-    const { data: updatedItem, error: updateError } = await supabase
-      .from('budget_plan_items')
-      .update({ planned_amount: nextAmount })
-      .eq('id', currentItem.id)
-      .select(ITEM_SELECT_COLUMNS)
-      .single();
-
-    if (updateError) {
-      throw updateError;
-    }
+    const updatedItem = await queryOne(
+      `update budget_plan_items set planned_amount = $2 where id = $1 returning ${ITEM_SELECT_COLUMNS}`,
+      [currentItem.id, nextAmount]
+    );
 
     itemByCategory.set(item.category, updatedItem);
   }
 
-  if (itemsToInsert.length) {
-    const { error: insertError } = await supabase
-      .from('budget_plan_items')
-      .insert(itemsToInsert);
-
-    if (insertError) {
-      throw insertError;
-    }
-  }
+  await insertPlanItems(plan.id, itemsToInsert);
 
   return attachItems(plan);
 }
 
 async function updateBudgetPlanDates(userId, planId, { startDate, endDate }) {
-  const { data, error } = await supabase
-    .from('budget_plans')
-    .update({
-      start_date: startDate,
-      end_date: endDate
-    })
-    .eq('id', planId)
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .select(PLAN_SELECT_COLUMNS)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
+  const data = await queryOne(
+    `update budget_plans set start_date = $3, end_date = $4
+     where id = $1 and user_id = $2 and is_active = true
+     returning ${PLAN_SELECT_COLUMNS}`,
+    [planId, userId, startDate, endDate]
+  );
 
   if (!data) {
     const notFoundError = new Error('BUDGET_PLAN_NOT_FOUND');
@@ -428,17 +365,12 @@ async function updateBudgetPlanItem(userId, itemId, plannedAmount) {
     throw new Error("Reja summasi musbat raqam bo'lishi kerak.");
   }
 
-  const { data: item, error: itemError } = await supabase
-    .from('budget_plan_items')
-    .select(`${ITEM_SELECT_COLUMNS}, budget_plans!inner(user_id, is_active)`)
-    .eq('id', itemId)
-    .eq('budget_plans.user_id', userId)
-    .eq('budget_plans.is_active', true)
-    .maybeSingle();
-
-  if (itemError) {
-    throw itemError;
-  }
+  const item = await queryOne(
+    `select i.id from budget_plan_items i
+     join budget_plans p on p.id = i.budget_plan_id
+     where i.id = $1 and p.user_id = $2 and p.is_active = true`,
+    [itemId, userId]
+  );
 
   if (!item) {
     const notFoundError = new Error('BUDGET_PLAN_ITEM_NOT_FOUND');
@@ -446,35 +378,19 @@ async function updateBudgetPlanItem(userId, itemId, plannedAmount) {
     throw notFoundError;
   }
 
-  const { data, error } = await supabase
-    .from('budget_plan_items')
-    .update({ planned_amount: amount })
-    .eq('id', itemId)
-    .select(ITEM_SELECT_COLUMNS)
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return queryOne(
+    `update budget_plan_items set planned_amount = $2 where id = $1 returning ${ITEM_SELECT_COLUMNS}`,
+    [itemId, amount]
+  );
 }
 
 async function getPlanExpenses(userId, plan) {
   const { start, end } = getDateRangeBounds(plan.start_date, plan.end_date);
-  const { data, error } = await supabase
-    .from('expenses')
-    .select('id, amount, category, type, created_at')
-    .eq('user_id', userId)
-    .eq('type', 'expense')
-    .gte('created_at', start.toISOString())
-    .lt('created_at', end.toISOString());
-
-  if (error) {
-    throw error;
-  }
-
-  return data || [];
+  return query(
+    `select id, amount, category, type, created_at from expenses
+     where user_id = $1 and type = 'expense' and created_at >= $2 and created_at < $3`,
+    [userId, start.toISOString(), end.toISOString()]
+  );
 }
 
 async function getBudgetPlanProgress(userId, plan) {
@@ -554,37 +470,24 @@ async function getBudgetWarningsForExpenses(userId, expenses = [], date = new Da
 
 async function getExpiredActiveBudgetPlan(userId, date = new Date()) {
   const today = getDateKey(date);
-  const { data, error } = await supabase
-    .from('budget_plans')
-    .select(PLAN_SELECT_COLUMNS)
-    .eq('user_id', userId)
-    .eq('is_active', true)
-    .lt('end_date', today)
-    .order('end_date', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
+  const data = await queryOne(
+    `select ${PLAN_SELECT_COLUMNS} from budget_plans
+     where user_id = $1 and is_active = true and end_date < $2
+     order by end_date desc
+     limit 1`,
+    [userId, today]
+  );
 
   return attachItems(data);
 }
 
 async function closeBudgetPlan(userId, planId) {
-  const { data, error } = await supabase
-    .from('budget_plans')
-    .update({ is_active: false })
-    .eq('id', planId)
-    .eq('user_id', userId)
-    .select(PLAN_SELECT_COLUMNS)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return queryOne(
+    `update budget_plans set is_active = false
+     where id = $1 and user_id = $2
+     returning ${PLAN_SELECT_COLUMNS}`,
+    [planId, userId]
+  );
 }
 
 module.exports = {

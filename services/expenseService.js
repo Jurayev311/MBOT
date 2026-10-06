@@ -1,4 +1,4 @@
-const { supabase } = require('../config/db');
+const { query, queryOne } = require('../config/db');
 const budgetPlanService = require('./budgetPlanService');
 const { CATEGORIES } = require('./ai');
 const { getMonthKey } = require('./userService');
@@ -121,85 +121,56 @@ function normalizeInputType(inputType) {
 
 async function createExpense(userId, expense, month = getMonthKey(), inputType = 'text') {
   const payload = validateExpense(expense);
-  const { data, error } = await supabase
-    .from('expenses')
-    .insert({
-      user_id: userId,
-      amount: payload.amount,
-      category: payload.category,
-      type: payload.type,
-      note: payload.note,
+  return queryOne(
+    `insert into expenses (user_id, amount, category, type, note, month, input_type)
+     values ($1, $2, $3, $4, $5, $6, $7)
+     returning *`,
+    [
+      userId,
+      payload.amount,
+      payload.category,
+      payload.type,
+      payload.note,
       month,
-      input_type: normalizeInputType(inputType)
-    })
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+      normalizeInputType(inputType)
+    ]
+  );
 }
 
 async function getMonthlyExpenses(userId, month = getMonthKey()) {
-  const { data, error } = await supabase
-    .from('expenses')
-    .select(EXPENSE_SELECT_COLUMNS)
-    .eq('user_id', userId)
-    .eq('month', month)
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    throw error;
-  }
-
-  return data || [];
+  return query(
+    `select ${EXPENSE_SELECT_COLUMNS} from expenses
+     where user_id = $1 and month = $2
+     order by created_at desc`,
+    [userId, month]
+  );
 }
 
 async function getExpenseByIdForUser(userId, expenseId) {
-  const { data, error } = await supabase
-    .from('expenses')
-    .select(EXPENSE_SELECT_COLUMNS)
-    .eq('id', expenseId)
-    .eq('user_id', userId)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return queryOne(
+    `select ${EXPENSE_SELECT_COLUMNS} from expenses where id = $1 and user_id = $2`,
+    [expenseId, userId]
+  );
 }
 
 async function getDailyTransactionCount(userId, date = new Date()) {
   const { start, end } = getDayBounds(date);
-  const { count, error } = await supabase
-    .from('expenses')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', userId)
-    .gte('created_at', start.toISOString())
-    .lt('created_at', end.toISOString());
+  const row = await queryOne(
+    `select count(*)::int as count from expenses
+     where user_id = $1 and created_at >= $2 and created_at < $3`,
+    [userId, start.toISOString(), end.toISOString()]
+  );
 
-  if (error) {
-    throw error;
-  }
-
-  return Number(count || 0);
+  return Number(row?.count || 0);
 }
 
 async function updateExpenseAmount(userId, expenseId, amount) {
-  const { data, error } = await supabase
-    .from('expenses')
-    .update({ amount: assertPositiveAmount(amount) })
-    .eq('id', expenseId)
-    .eq('user_id', userId)
-    .select(EXPENSE_SELECT_COLUMNS)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
+  const data = await queryOne(
+    `update expenses set amount = $3
+     where id = $1 and user_id = $2
+     returning ${EXPENSE_SELECT_COLUMNS}`,
+    [expenseId, userId, assertPositiveAmount(amount)]
+  );
 
   if (!data) {
     const notFoundError = new Error('EXPENSE_NOT_FOUND');
@@ -219,15 +190,7 @@ async function deleteExpenseByIdForUser(userId, expenseId) {
     throw notFoundError;
   }
 
-  const { error } = await supabase
-    .from('expenses')
-    .delete()
-    .eq('id', expenseId)
-    .eq('user_id', userId);
-
-  if (error) {
-    throw error;
-  }
+  await query('delete from expenses where id = $1 and user_id = $2', [expenseId, userId]);
 
   return expense;
 }
@@ -265,18 +228,13 @@ async function getMonthlySummary(userId, month = getMonthKey()) {
 }
 
 async function getMonthlyHistory(userId, limit = 6) {
-  const { data, error } = await supabase
-    .from('monthly_history')
-    .select('month, salary, total_spent, savings, created_at')
-    .eq('user_id', userId)
-    .order('month', { ascending: false })
-    .limit(limit);
-
-  if (error) {
-    throw error;
-  }
-
-  return data || [];
+  return query(
+    `select month, salary, total_spent, savings, created_at from monthly_history
+     where user_id = $1
+     order by month desc
+     limit $2`,
+    [userId, limit]
+  );
 }
 
 async function getAdviceData(user) {

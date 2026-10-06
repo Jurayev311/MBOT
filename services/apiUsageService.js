@@ -1,4 +1,4 @@
-const { supabase } = require('../config/db');
+const { query, queryOne } = require('../config/db');
 
 function getTimeZoneParts(date, timeZone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -55,28 +55,17 @@ function getTodayBounds(date = new Date()) {
 }
 
 async function logApiUsage() {
-  const { error } = await supabase
-    .from('api_usage_log')
-    .insert({});
-
-  if (error) {
-    throw error;
-  }
+  await query('insert into api_usage_log default values');
 }
 
 async function getTodayApiUsageCount(date = new Date()) {
   const { start, end } = getTodayBounds(date);
-  const { count, error } = await supabase
-    .from('api_usage_log')
-    .select('id', { count: 'exact', head: true })
-    .gte('created_at', start.toISOString())
-    .lt('created_at', end.toISOString());
+  const row = await queryOne(
+    'select count(*)::int as count from api_usage_log where created_at >= $1 and created_at < $2',
+    [start.toISOString(), end.toISOString()]
+  );
 
-  if (error) {
-    throw error;
-  }
-
-  return Number(count || 0);
+  return Number(row?.count || 0);
 }
 
 module.exports = {

@@ -13,12 +13,11 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "@supabase/supabase-js": "^2.110.0",
     "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "node-cron": "^4.5.0",
     "node-telegram-bot-api": "^1.1.2",
-    "ws": "^8.21.0"
+    "pg": "^8.23.1"
   }
 }

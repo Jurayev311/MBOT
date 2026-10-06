@@ -1,6 +1,7 @@
 require('dotenv').config({ quiet: true });
 
 const express = require('express');
+const { migrate, pool } = require('./config/db');
 const { startBot } = require('./bot/bot');
 const { startMonthCheck } = require('./jobs/monthCheck');
 
@@ -23,6 +24,10 @@ app.get('/health', (req, res) => {
 });
 
 async function main() {
+  // Jadvallar mavjud bo'lmasa yaratiladi; schema idempotent.
+  await migrate();
+  console.log('Postgres schema tayyor.');
+
   const bot = startBot();
   startMonthCheck(bot);
 
@@ -37,6 +42,8 @@ async function main() {
     if (bot.isPolling()) {
       await bot.stopPolling();
     }
+
+    await pool.end();
 
     process.exit(0);
   };

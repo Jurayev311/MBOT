@@ -1,4 +1,4 @@
-const { supabase } = require('../config/db');
+const { buildSet, query, queryOne } = require('../config/db');
 const { parseAmount } = require('../utils/parseAmount');
 
 function getMonthKey(date = new Date()) {
@@ -102,17 +102,7 @@ function isPremiumExpired(user, date = new Date()) {
 
 async function getUserByTelegramId(telegramId) {
   const normalizedId = normalizeTelegramId(telegramId);
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .eq('telegram_id', normalizedId)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return queryOne('select * from users where telegram_id = $1', [normalizedId]);
 }
 
 async function ensureUser(from) {
@@ -123,24 +113,18 @@ async function ensureUser(from) {
     return existingUser;
   }
 
-  const { data, error } = await supabase
-    .from('users')
-    .insert({
-      telegram_id: telegramId,
-      current_month: getMonthKey()
-    })
-    .select('*')
-    .single();
-
-  if (error) {
+  try {
+    return await queryOne(
+      'insert into users (telegram_id, current_month) values ($1, $2) returning *',
+      [telegramId, getMonthKey()]
+    );
+  } catch (error) {
     if (error.code === '23505') {
       return getUserByTelegramId(telegramId);
     }
 
     throw error;
   }
-
-  return data;
 }
 
 function assertPositiveAmount(amount) {
@@ -153,37 +137,31 @@ function assertPositiveAmount(amount) {
   return normalized;
 }
 
-async function updateSalary(userId, amount, month = getMonthKey()) {
-  const { data, error } = await supabase
-    .from('users')
-    .update({
-      current_salary: assertPositiveAmount(amount),
-      current_month: month
-    })
-    .eq('id', userId)
-    .select('*')
-    .single();
+async function updateUserById(userId, fields) {
+  const { clause, values } = buildSet(fields, 2);
+  const data = await queryOne(`update users set ${clause} where id = $1 returning *`, [userId, ...values]);
 
-  if (error) {
-    throw error;
+  if (!data) {
+    throw new Error('USER_NOT_FOUND');
   }
 
   return data;
 }
 
+async function updateUserByTelegramId(telegramId, fields) {
+  const { clause, values } = buildSet(fields, 2);
+  return queryOne(`update users set ${clause} where telegram_id = $1 returning *`, [telegramId, ...values]);
+}
+
+async function updateSalary(userId, amount, month = getMonthKey()) {
+  return updateUserById(userId, {
+    current_salary: assertPositiveAmount(amount),
+    current_month: month
+  });
+}
+
 async function updateCurrentMonth(userId, month = getMonthKey()) {
-  const { data, error } = await supabase
-    .from('users')
-    .update({ current_month: month })
-    .eq('id', userId)
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return updateUserById(userId, { current_month: month });
 }
 
 async function updateFullName(userId, fullName) {
@@ -193,38 +171,18 @@ async function updateFullName(userId, fullName) {
     throw new Error("Ism bo'sh bo'lmasligi kerak.");
   }
 
-  const { data, error } = await supabase
-    .from('users')
-    .update({ full_name: cleanName })
-    .eq('id', userId)
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return updateUserById(userId, { full_name: cleanName });
 }
 
 async function updatePremiumByTelegramId(telegramId, enabled) {
   const normalizedId = normalizeTelegramId(telegramId);
-  const { data, error } = await supabase
-    .from('users')
-    .update({
-      is_premium: Boolean(enabled),
-      daily_limit: enabled ? 50 : 15,
-      daily_voice_limit: enabled ? 10 : 2,
-      premium_expires_at: enabled ? getPremiumExpiryDate().toISOString() : null,
-      awaiting_payment: false
-    })
-    .eq('telegram_id', normalizedId)
-    .select('*')
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
+  const data = await updateUserByTelegramId(normalizedId, {
+    is_premium: Boolean(enabled),
+    daily_limit: enabled ? 50 : 15,
+    daily_voice_limit: enabled ? 10 : 2,
+    premium_expires_at: enabled ? getPremiumExpiryDate().toISOString() : null,
+    awaiting_payment: false
+  });
 
   if (!data) {
     const notFoundError = new Error('USER_NOT_FOUND');
@@ -236,23 +194,12 @@ async function updatePremiumByTelegramId(telegramId, enabled) {
 }
 
 async function expirePremium(userId) {
-  const { data, error } = await supabase
-    .from('users')
-    .update({
-      is_premium: false,
-      daily_limit: 15,
-      daily_voice_limit: 2,
-      premium_expires_at: null
-    })
-    .eq('id', userId)
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return updateUserById(userId, {
+    is_premium: false,
+    daily_limit: 15,
+    daily_voice_limit: 2,
+    premium_expires_at: null
+  });
 }
 
 async function incrementDailyUsage(user, amount = 1, inputType = 'text', date = new Date()) {
@@ -275,95 +222,28 @@ async function incrementDailyUsage(user, amount = 1, inputType = 'text', date = 
       daily_usage_date: today
     };
 
-  const { data, error } = await supabase
-    .from('users')
-    .update(payload)
-    .eq('id', user.id)
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return updateUserById(user.id, payload);
 }
 
 async function updateAwaitingPayment(userId, awaitingPayment) {
-  const { data, error } = await supabase
-    .from('users')
-    .update({ awaiting_payment: Boolean(awaitingPayment) })
-    .eq('id', userId)
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return updateUserById(userId, { awaiting_payment: Boolean(awaitingPayment) });
 }
 
 async function updateAwaitingPaymentByTelegramId(telegramId, awaitingPayment) {
   const normalizedId = normalizeTelegramId(telegramId);
-  const { data, error } = await supabase
-    .from('users')
-    .update({ awaiting_payment: Boolean(awaitingPayment) })
-    .eq('telegram_id', normalizedId)
-    .select('*')
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return updateUserByTelegramId(normalizedId, { awaiting_payment: Boolean(awaitingPayment) });
 }
 
 async function resetUserData(userId) {
   // Foydalanuvchi qatori qoladi, moliyaviy ma'lumotlar esa tozalanadi.
-  const budgetPlansDelete = await supabase
-    .from('budget_plans')
-    .delete()
-    .eq('user_id', userId);
+  await query('delete from budget_plans where user_id = $1', [userId]);
+  await query('delete from expenses where user_id = $1', [userId]);
+  await query('delete from monthly_history where user_id = $1', [userId]);
 
-  if (budgetPlansDelete.error) {
-    throw budgetPlansDelete.error;
-  }
-
-  const expensesDelete = await supabase
-    .from('expenses')
-    .delete()
-    .eq('user_id', userId);
-
-  if (expensesDelete.error) {
-    throw expensesDelete.error;
-  }
-
-  const historyDelete = await supabase
-    .from('monthly_history')
-    .delete()
-    .eq('user_id', userId);
-
-  if (historyDelete.error) {
-    throw historyDelete.error;
-  }
-
-  const { data, error } = await supabase
-    .from('users')
-    .update({
-      current_salary: 0,
-      current_month: getMonthKey()
-    })
-    .eq('id', userId)
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return updateUserById(userId, {
+    current_salary: 0,
+    current_month: getMonthKey()
+  });
 }
 
 async function deleteUserCompletelyByTelegramId(telegramId) {
@@ -376,67 +256,27 @@ async function deleteUserCompletelyByTelegramId(telegramId) {
     throw notFoundError;
   }
 
-  const expensesDelete = await supabase
-    .from('expenses')
-    .delete()
-    .eq('user_id', user.id);
-
-  if (expensesDelete.error) {
-    throw expensesDelete.error;
-  }
-
-  const historyDelete = await supabase
-    .from('monthly_history')
-    .delete()
-    .eq('user_id', user.id);
-
-  if (historyDelete.error) {
-    throw historyDelete.error;
-  }
-
-  const userDelete = await supabase
-    .from('users')
-    .delete()
-    .eq('id', user.id);
-
-  if (userDelete.error) {
-    throw userDelete.error;
-  }
+  // Bog'liq jadvallar "on delete cascade" orqali tozalanadi.
+  await query('delete from users where id = $1', [user.id]);
 
   return user;
 }
 
 async function getAllUsers() {
-  const { data, error } = await supabase
-    .from('users')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    throw error;
-  }
-
-  return data || [];
+  return query('select * from users order by created_at desc');
 }
 
 async function saveMonthlyHistory({ userId, month, salary, totalSpent, savings }) {
-  const { data, error } = await supabase
-    .from('monthly_history')
-    .upsert({
-      user_id: userId,
-      month,
-      salary: Number(salary || 0),
-      total_spent: Number(totalSpent || 0),
-      savings: Number(savings || 0)
-    }, { onConflict: 'user_id,month' })
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return queryOne(
+    `insert into monthly_history (user_id, month, salary, total_spent, savings)
+     values ($1, $2, $3, $4, $5)
+     on conflict (user_id, month) do update set
+       salary = excluded.salary,
+       total_spent = excluded.total_spent,
+       savings = excluded.savings
+     returning *`,
+    [userId, month, Number(salary || 0), Number(totalSpent || 0), Number(savings || 0)]
+  );
 }
 
 module.exports = {

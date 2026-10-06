@@ -1,6 +1,6 @@
 # Telegram Moliyaviy AI-bot
 
-Node.js, Express, Supabase va Google Gemini asosida qurilgan Telegram moliyaviy yordamchi bot. Foydalanuvchi odatda erkin matn yozadi, masalan `25000 nonga`; bot summa va kategoriyani Gemini orqali ajratadi, Supabase'ga saqlaydi va hisobot hamda maslahat beradi.
+Node.js, Express, PostgreSQL (Railway) va Google Gemini asosida qurilgan Telegram moliyaviy yordamchi bot. Foydalanuvchi odatda erkin matn yozadi, masalan `25000 nonga`; bot summa va kategoriyani Gemini orqali ajratadi, PostgreSQL'ga saqlaydi va hisobot hamda maslahat beradi.
 
 ## Papka Tuzilishi
 
@@ -19,7 +19,8 @@ Node.js, Express, Supabase va Google Gemini asosida qurilgan Telegram moliyaviy 
 index.js
 package.json
 README.md
-supabase_schema.sql
+/db
+  schema.sql
 ```
 
 ## O'rnatish
@@ -32,8 +33,7 @@ Lokal `.env` faylini yarating va to'ldiring. Bu fayl gitga qo'shilmasligi kerak:
 
 ```env
 TELEGRAM_BOT_TOKEN=123456789:telegram_bot_token
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=your_supabase_service_role_key
+DATABASE_URL=postgresql://user:password@host:5432/railway
 GEMINI_API_KEY=your_gemini_api_key
 ADMIN_TELEGRAM_ID=123456789
 PAYMENT_CARD_NUMBER=8600 1234 5678 9012
@@ -59,18 +59,9 @@ GET http://localhost:3000/
 GET http://localhost:3000/health
 ```
 
-## Supabase Sozlash
+## Baza
 
-Supabase loyihangizda `Project Settings -> API` bo'limidan `SUPABASE_URL` va `service_role` kalitini oling. `service_role` faqat backend `.env` faylida turishi kerak.
-
-Keyin `SQL Editor` bo'limida `supabase_schema.sql` faylidagi skriptni to'liq ishga tushiring. Skript quyidagilarni yaratadi:
-
-- `users`
-- `expenses`
-- `monthly_history`
-- indekslar
-- RLS yoqilishi
-- faqat `service_role` uchun to'liq ruxsat policy'lari
+Bot oddiy PostgreSQL bilan ishlaydi (`DATABASE_URL`). Ishga tushganda `db/schema.sql` avtomatik bajariladi va jadvallar yaratiladi, shuning uchun qo'lda SQL ishga tushirish shart emas. Schema idempotent: har deployda qayta ishlashi xavfsiz.
 
 ## Telegram Bot Olish
 
@@ -84,7 +75,7 @@ Google AI Studio'dan Gemini API kalitini oling va `.env` ichidagi `GEMINI_API_KE
 
 ## Premium va Admin
 
-`users` jadvaliga premium uchun `daily_limit`, `daily_voice_limit` va `is_premium` ustunlari qo'shilgan. Mavjud Supabase loyihada `supabase_schema.sql` ichidagi migration blokini SQL Editor'da ishga tushiring.
+`users` jadvaliga premium uchun `daily_limit`, `daily_voice_limit` va `is_premium` ustunlari qo'shilgan. Migratsiya bot ishga tushganda avtomatik bajariladi.
 
 Admin buyruqlari faqat `.env` ichidagi `ADMIN_TELEGRAM_ID` egasiga ishlaydi:
 
@@ -109,27 +100,25 @@ Kunlik cron muddati tugagan premiumlarni avtomatik oddiy tarifga qaytaradi.
 - ReplyKeyboard doim 4 ta tugmani ko'rsatadi: `📊 Hisobot`, `💰 Maosh`, `🤖 AI Tahlil`, `⚙️ Sozlamalar`.
 - `node-cron` har kuni soat 09:00 da oy almashganini tekshiradi, eski oy yakunini `monthly_history` ga yozadi va foydalanuvchidan maoshni tasdiqlashni so'raydi.
 
-## Render.com Deploy
+## Railway Deploy
 
-1. Loyihani GitHub repository'ga push qiling.
-2. Render'da `New -> Web Service` tanlang.
-3. Repository'ni ulang.
-4. Build command: `npm install`
-5. Start command: `npm start`
-6. Environment variables bo'limiga lokal `.env` dagi kerakli qiymatlarni kiriting.
-7. Deploy qiling.
+Project: `mbot` (servislar: `bot` va `Postgres`). `bot` servisidagi `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`.
 
-## Railway.app Deploy
+```bash
+railway link                 # papkani mbot projectiga ulash
+railway service link bot
+railway up --detach          # deploy
+railway logs                 # loglar
+railway variables            # o'zgaruvchilar
+railway variables --set "KEY=VALUE"
+```
 
-1. Railway'da yangi project oching.
-2. GitHub repository'ni ulang.
-3. Variables bo'limiga lokal `.env` dagi kerakli o'zgaruvchilarni kiriting.
-4. Railway odatda `npm install` va `npm start` ni avtomatik topadi; topmasa start command sifatida `npm start` kiriting.
+Botni bir vaqtning o'zida faqat bitta joyda polling rejimida ishga tushiring, aks holda Telegram 409 Conflict qaytaradi.
 
 ## Xavfsizlik
 
 - `.env` `.gitignore` ichida turadi, maxfiy kalitlar gitga tushmaydi.
-- Backend Supabase'ga faqat `service_role` orqali ulanadi.
+- Baza faqat Railway ichki tarmog'i orqali ulanadi (`postgres.railway.internal`).
 - Har bir Telegram xabari `telegram_id` orqali foydalanuvchiga bog'lanadi.
 - Xarajat matni 200 belgi bilan cheklangan.
 - Summa musbat raqam bo'lishi shart.
