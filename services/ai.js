@@ -411,17 +411,23 @@ function normalizeKeywordText(value) {
     .replace(/\s+/g, ' ');
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Kalit so'z to'liq so'z sifatida kelishi kerak: "qarzimni qaytardi" (kirim) "qarzimni qaytardim" (chiqim) ga mos kelmaydi.
+function hasIncomeKeyword(normalizedText) {
+  return INCOME_KEYWORDS.some((keyword) => (
+    new RegExp(`(^|[^a-z'])${escapeRegExp(normalizeKeywordText(keyword))}(?![a-z'])`).test(normalizedText)
+  ));
+}
+
 function inferTransactionType(text, rawAmount = '') {
   if (String(rawAmount || '').trim().startsWith('+')) {
     return 'income';
   }
 
-  const normalizedText = normalizeKeywordText(text);
-  const hasIncomeKeyword = INCOME_KEYWORDS.some((keyword) => (
-    normalizedText.includes(normalizeKeywordText(keyword))
-  ));
-
-  return hasIncomeKeyword ? 'income' : 'expense';
+  return hasIncomeKeyword(normalizeKeywordText(text)) ? 'income' : 'expense';
 }
 
 function normalizeTransactionType(value, context = '', category = '') {
@@ -442,6 +448,18 @@ function normalizeTransactionType(value, context = '', category = '') {
   return inferTransactionType(context);
 }
 
+// "Akadan qarz", "qarz oldim" kabi yozuvlar kirim emas. Faqat qarz foydalanuvchiga qaytarilgan
+// (INCOME_KEYWORDS) yoki summa aniq "+" bilan yozilgan holatda kirim qoldiriladi.
+function isDebtWithoutRepayment(noteText, fullText = '') {
+  const note = normalizeKeywordText(noteText);
+
+  if (!note.includes('qarz') || String(fullText || '').includes('+')) {
+    return false;
+  }
+
+  return !hasIncomeKeyword(note);
+}
+
 function normalizeExpensePayload(payload, fallbackNote) {
   const amount = toPositiveNumber(payload.amount);
 
@@ -452,12 +470,18 @@ function normalizeExpensePayload(payload, fallbackNote) {
   const typeContext = payload.note
     ? String(payload.note)
     : String(fallbackNote || '');
-  const type = normalizeTransactionType(payload.type, typeContext, payload.category);
+  let type = normalizeTransactionType(payload.type, typeContext, payload.category);
+  let category = payload.category;
+
+  if (type === 'income' && isDebtWithoutRepayment(typeContext, fallbackNote)) {
+    type = 'expense';
+    category = 'Qarz';
+  }
 
   return {
     amount,
     type,
-    category: type === 'income' ? INCOME_CATEGORY : normalizeCategory(payload.category),
+    category: type === 'income' ? INCOME_CATEGORY : normalizeCategory(category),
     note: compactInput(payload.note || fallbackNote, 200)
   };
 }
@@ -1007,6 +1031,9 @@ async function categorizeExpense(text, options = {}) {
       "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', '+' belgisi bilan boshlangan summa, 'kirim', 'daromad' so'zlari.",
       '',
       "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
+      '',
+      "QARZ QOIDASI: faqat birov qarzini foydalanuvchiga QAYTARSA ('qarzimni qaytardi', 'qarz qaytdi', 'qarzini to'ladi') bu KIRIM.",
+      "'X dan qarz', 'X akadan qarz', 'X ga qarz', 'qarz oldim', 'qarzim bor', 'qarzdorman', 'qarz to'ladim', 'qarzni qaytardim' -> bu KIRIM EMAS: type='expense', category='Qarz'.",
       '',
       "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila (kirim uchun boshqa kategoriyalar kerak emas, hammasi 'Kirim' deb belgilansin). Agar CHIQIM bo'lsa, type='expense' va ma'nosi eng yaqin kategoriyani tanla.",
       `Chiqim kategoriyalari: ${CATEGORIES.join(', ')}.`,

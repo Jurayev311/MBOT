@@ -109,6 +109,16 @@ const BUDGET_PLAN_TEXT_MIN_LENGTH = 10;
 const BUDGET_PLAN_TEXT_MAX_LENGTH = 4000;
 const rateBuckets = new Map();
 const userStates = new Map();
+const expiredPlanStates = new Map();
+const EXPIRABLE_PLAN_STATES = new Set([
+  'awaiting_budget_plan_dates',
+  'awaiting_budget_plan_date_confirm',
+  'awaiting_budget_plan_items',
+  'awaiting_budget_plan_add_items'
+]);
+const EXPIRED_PLAN_KEEP_MS = 24 * 60 * 60 * 1000;
+const EXPIRED_PLAN_AS_PLAN_CALLBACK = 'expired_plan_as_plan';
+const EXPIRED_PLAN_AS_TRANSACTION_CALLBACK = 'expired_plan_as_tx';
 const consumedCallbackMessages = new Map();
 const CALLBACK_CONSUMED_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -590,6 +600,28 @@ function getExpenseActionMarkup(expense, telegramId) {
   };
 }
 
+// Bir xabarda bir nechta yozuv saqlansa, har biri uchun raqamli tahrir/o'chirish tugmalari.
+function getMultiExpenseActionMarkup(expenses, telegramId) {
+  return {
+    reply_markup: {
+      inline_keyboard: expenses.map((expense, index) => [
+        {
+          text: `✏️ ${index + 1}-ni tahrirlash`,
+          callback_data: buildExpenseActionCallback(EXPENSE_EDIT_PREFIX, expense.id, telegramId)
+        },
+        {
+          text: `🗑️ ${index + 1}-ni o'chirish`,
+          callback_data: buildExpenseActionCallback(EXPENSE_DELETE_PREFIX, expense.id, telegramId)
+        }
+      ])
+    }
+  };
+}
+
+function isMultiExpenseMessage(query) {
+  return (query.message?.reply_markup?.inline_keyboard?.length || 0) > 1;
+}
+
 function getExpenseDeleteConfirmMarkup(expenseId, telegramId) {
   return {
     reply_markup: {
@@ -710,6 +742,25 @@ function clearUserState(telegramId) {
   userStates.delete(String(telegramId));
 }
 
+function takeExpiredPlanState(telegramId) {
+  const key = String(telegramId);
+  const expired = expiredPlanStates.get(key);
+  expiredPlanStates.delete(key);
+
+  return expired && Date.now() - expired.expiredAt <= EXPIRED_PLAN_KEEP_MS ? expired : null;
+}
+
+function getExpiredPlanChoiceMarkup() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📆 Reja uchun', callback_data: EXPIRED_PLAN_AS_PLAN_CALLBACK }],
+        [{ text: "💸 Xarajat/kirim sifatida saqlash", callback_data: EXPIRED_PLAN_AS_TRANSACTION_CALLBACK }]
+      ]
+    }
+  };
+}
+
 function getUserState(telegramId) {
   const state = userStates.get(String(telegramId));
 
@@ -720,6 +771,12 @@ function getUserState(telegramId) {
   const isExpired = Date.now() - state.createdAt > 30 * 60 * 1000; // Extended from 15 to 30 minutes
   if (isExpired) {
     clearUserState(telegramId);
+
+    // Reja jarayoni muddati tugasa, keyingi xabar jimgina xarajat/kirim bo'lib saqlanmasligi uchun eslab qolamiz.
+    if (EXPIRABLE_PLAN_STATES.has(state.type)) {
+      expiredPlanStates.set(String(telegramId), { type: state.type, data: state.data, expiredAt: Date.now() });
+    }
+
     return null;
   }
 
@@ -1686,6 +1743,7 @@ async function handleStart(bot, msg) {
 
     // /start har doim toza boshlaydi: yarim qolgan reja, maosh yoki tahrir jarayoni bekor qilinadi.
     clearUserState(telegramId);
+    expiredPlanStates.delete(String(telegramId));
 
     if (!hasFullName(user)) {
       setUserState(telegramId, 'awaiting_start_name');
@@ -2724,7 +2782,9 @@ async function handleExpenseText(bot, chatId, user, text) {
 
     const messageOptions = expenses.length === 1 && savedExpenses.length === 1 && skippedCount === 0
       ? getExpenseActionMarkup(savedExpenses[0], user.telegram_id)
-      : MAIN_KEYBOARD;
+      : savedExpenses.length > 1
+        ? getMultiExpenseActionMarkup(savedExpenses, user.telegram_id)
+        : MAIN_KEYBOARD;
 
     await bot.sendMessage(
       chatId,
@@ -3038,16 +3098,19 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       return;
     }
 
-    await editCallbackMessageText(
-      bot,
-      query,
-      [
-        `Bu ${getTransactionKindLabel(expense).toLowerCase()}ni o'chirmoqchimisiz?`,
-        '',
-        `${formatTransactionAmount(expense)} (${expense.category})`
-      ].join('\n'),
-      getExpenseDeleteConfirmMarkup(expense.id, telegramId)
-    );
+    const confirmText = [
+      `Bu ${getTransactionKindLabel(expense).toLowerCase()}ni o'chirmoqchimisiz?`,
+      '',
+      `${formatTransactionAmount(expense)} (${expense.category})${expense.note ? ` — ${expense.note}` : ''}`
+    ].join('\n');
+
+    // Ko'p yozuvli xabar ro'yxati saqlanib qolishi uchun tasdiqlash alohida xabarda so'raladi.
+    if (isMultiExpenseMessage(query)) {
+      await bot.sendMessage(query.message.chat.id, confirmText, getExpenseDeleteConfirmMarkup(expense.id, telegramId));
+      return;
+    }
+
+    await editCallbackMessageText(bot, query, confirmText, getExpenseDeleteConfirmMarkup(expense.id, telegramId));
     return;
   }
 
@@ -3102,7 +3165,10 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       return;
     }
 
-    await removeInlineKeyboard(bot, query);
+    if (!isMultiExpenseMessage(query)) {
+      await removeInlineKeyboard(bot, query);
+    }
+
     setUserState(telegramId, 'awaiting_expense_edit_amount', {
       expenseId: expense.id,
       oldAmount: Number(expense.amount || 0),
@@ -3111,7 +3177,11 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       note: expense.note,
       month: expense.month || user.current_month || userService.getMonthKey()
     });
-    await bot.sendMessage(query.message.chat.id, "Yangi summani kiriting (so'mda):", MAIN_KEYBOARD);
+    await bot.sendMessage(
+      query.message.chat.id,
+      `${formatTransactionAmount(expense)}${expense.note ? ` (${expense.note})` : ''} uchun yangi summani kiriting (so'mda):`,
+      MAIN_KEYBOARD
+    );
   }
 }
 
@@ -3289,6 +3359,26 @@ async function handleCallback(bot, query) {
 
     const user = await userService.ensureUser(query.from);
 
+    if (query.data === EXPIRED_PLAN_AS_PLAN_CALLBACK || query.data === EXPIRED_PLAN_AS_TRANSACTION_CALLBACK) {
+      await consumeCallbackMessage(bot, query, callbackKey);
+      const choiceState = getUserState(telegramId);
+
+      if (choiceState?.type !== 'awaiting_expired_plan_choice') {
+        await bot.sendMessage(chatId, "Bu tanlov eskirgan. Xabarni qayta yuboring.", MAIN_KEYBOARD);
+        return;
+      }
+
+      const { text: pendingText, expiredPlan } = choiceState.data;
+      clearUserState(telegramId);
+
+      if (query.data === EXPIRED_PLAN_AS_PLAN_CALLBACK) {
+        setUserState(telegramId, expiredPlan.type, expiredPlan.data);
+      }
+
+      await handleMessage(bot, { chat: { id: chatId }, from: query.from, text: pendingText });
+      return;
+    }
+
     if (query.data === PAYMENT_START_CALLBACK) {
       await consumeCallbackMessage(bot, query, callbackKey);
 
@@ -3462,8 +3552,34 @@ async function handleMessage(bot, msg) {
   try {
     let user = await userService.ensureUser(msg.from);
     user = await rolloverUserMonth(bot, user);
-    const state = getUserState(telegramId);
+    let state = getUserState(telegramId);
     const normalizedText = text.trim();
+
+    if (state?.type === 'awaiting_expired_plan_choice') {
+      // Tanlov qilinmay yangi xabar yozildi: eski tanlov bekor, xabar odatdagidek ishlanadi.
+      clearUserState(telegramId);
+      state = null;
+    }
+
+    if (isMainKeyboardButtonText(normalizedText)) {
+      expiredPlanStates.delete(String(telegramId));
+    } else if (!state) {
+      const expiredPlan = takeExpiredPlanState(telegramId);
+
+      if (expiredPlan) {
+        setUserState(telegramId, 'awaiting_expired_plan_choice', { text: normalizedText, expiredPlan });
+        await bot.sendMessage(
+          chatId,
+          [
+            "⏳ Reja tuzish jarayoni 30 daqiqadan ko'proq to'xtab qolgani uchun yopilgan edi.",
+            '',
+            'Bu xabar reja uchunmi yoki xarajat/kirim sifatida saqlansinmi?'
+          ].join('\n'),
+          getExpiredPlanChoiceMarkup()
+        );
+        return;
+      }
+    }
 
     if (state?.type === 'awaiting_broadcast_message') {
       await handleBroadcastMessageInput(bot, chatId, telegramId, msg.from, normalizedText);
