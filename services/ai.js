@@ -84,7 +84,20 @@ const INCOME_KEYWORDS = [
   "qo'shimcha daromad",
   'qoshimcha daromad',
   'kirim',
-  'daromad'
+  'daromad',
+  'pul berdi',
+  'pul tashladi',
+  'avans',
+  'avans oldim',
+  'avans tushdi',
+  'avans berishdi',
+  'avans keldi',
+  'bonus',
+  'mukofot',
+  'premiya',
+  'oylik tushdi',
+  'keshbek',
+  'cashback'
 ];
 const CATEGORY_KEYWORDS = [
   {
@@ -109,7 +122,7 @@ const CATEGORY_KEYWORDS = [
   },
   {
     category: 'Aloqa',
-    keywords: ['aloqa', 'mobil aloqa', "telefon to'lovi", 'telefon tolovi', 'sim karta', 'tarif', 'uzmobile', 'ucell', 'beeline', 'mobiuz', 'humans', 'internet paketi']
+    keywords: ['aloqa', 'mobil aloqa', "telefon to'lovi", 'telefon tolovi', 'sim karta', 'tarif', 'uzmobile', 'ucell', 'beeline', 'mobiuz', 'humans', 'internet paketi', 'paynet']
   },
   {
     category: 'Obuna va servislar',
@@ -125,7 +138,7 @@ const CATEGORY_KEYWORDS = [
   },
   {
     category: 'Oziq-ovqat',
-    keywords: ['non', 'nonga', 'ovqat', 'osh', 'somsa', 'lavash', 'bozor', 'bozorga', 'market', 'supermarket', 'meva', 'sabzavot', 'choy', 'qahva', 'ichimlik', 'yeb', 'ichar', 'yeb-ichar']
+    keywords: ['non', 'nonga', 'ovqat', 'obed', 'tushlik', 'kechki ovqat', 'nonushta', 'fastfud', 'pizza', 'burger', 'osh', 'somsa', 'lavash', 'bozor', 'bozorga', 'market', 'supermarket', 'meva', 'sabzavot', 'choy', 'qahva', 'ichimlik', 'yeb', 'ichar', 'yeb-ichar']
   },
   {
     category: 'Kommunal',
@@ -157,7 +170,7 @@ const CATEGORY_KEYWORDS = [
   },
   {
     category: "Ko'ngilochar",
-    keywords: ['kino', 'konsert', "o'yin", 'oyin', 'dam olish', 'kafe', 'restoran']
+    keywords: ['kino', 'konsert', "o'yin", 'oyin', 'dam olish', 'kafe', 'restoran', 'sport', 'marafon', 'fitnes', 'fitness', 'trenajor', 'basseyn', 'futbol', 'hobbi']
   },
   {
     category: 'Kiyim-kechak',
@@ -237,10 +250,14 @@ function isRetryableGeminiError(error) {
   const message = String(error?.message || '');
   const status = Number(error?.status || error?.code || 0);
 
-  return status === 429
+  // 429 - limit, 500/503 - Gemini vaqtincha band yoki ortiqcha yuklangan.
+  return [429, 500, 503].includes(status)
     || message.includes('429')
+    || message.includes('503')
     || message.includes('QuotaFailure')
-    || message.includes('Too Many Requests');
+    || message.includes('Too Many Requests')
+    || message.includes('overloaded')
+    || message.includes('Service Unavailable');
 }
 
 function createAiBusyError(cause) {
@@ -284,35 +301,28 @@ async function runWithGeminiPacing(task) {
 }
 
 async function callGeminiWithRetry(label, task) {
-  try {
-    return await runWithGeminiPacing(task);
-  } catch (error) {
-    debugAi(`${label}.requestError`, {
-      model: geminiModelName || getConfiguredModelName(),
-      message: error.message,
-      status: error.status || error.code
-    });
+  const retryDelays = [GEMINI_RETRY_DELAY_MS, GEMINI_RETRY_DELAY_MS * 2.5];
 
-    if (!isRetryableGeminiError(error)) {
-      throw error;
-    }
-
-    await sleep(GEMINI_RETRY_DELAY_MS);
-
+  for (let attempt = 0; ; attempt += 1) {
     try {
       return await runWithGeminiPacing(task);
-    } catch (retryError) {
-      debugAi(`${label}.retryError`, {
+    } catch (error) {
+      debugAi(`${label}.requestError`, {
+        attempt,
         model: geminiModelName || getConfiguredModelName(),
-        message: retryError.message,
-        status: retryError.status || retryError.code
+        message: error.message,
+        status: error.status || error.code
       });
 
-      if (isRetryableGeminiError(retryError)) {
-        throw createAiBusyError(retryError);
+      if (!isRetryableGeminiError(error)) {
+        throw error;
       }
 
-      throw retryError;
+      if (attempt >= retryDelays.length) {
+        throw createAiBusyError(error);
+      }
+
+      await sleep(retryDelays[attempt]);
     }
   }
 }
@@ -422,12 +432,25 @@ function hasIncomeKeyword(normalizedText) {
   ));
 }
 
+// Foydalanuvchi o'zi kimgadir avans to'lagan holatlar (kvartiraga avans berdim) kirim emas.
+const PAID_ADVANCE_PATTERN = /(^|[^a-z'])avans(ga)?\s+(berdim|to'ladim|toladim|qildim|tashladim)(?![a-z'])|(^|[^a-z'])avansga(?![a-z'])/;
+
+function isPaidAdvance(normalizedText) {
+  return PAID_ADVANCE_PATTERN.test(normalizedText);
+}
+
 function inferTransactionType(text, rawAmount = '') {
   if (String(rawAmount || '').trim().startsWith('+')) {
     return 'income';
   }
 
-  return hasIncomeKeyword(normalizeKeywordText(text)) ? 'income' : 'expense';
+  const normalizedText = normalizeKeywordText(text);
+
+  if (isPaidAdvance(normalizedText)) {
+    return 'expense';
+  }
+
+  return hasIncomeKeyword(normalizedText) ? 'income' : 'expense';
 }
 
 function normalizeTransactionType(value, context = '', category = '') {
@@ -460,6 +483,11 @@ function isDebtWithoutRepayment(noteText, fullText = '') {
   return !hasIncomeKeyword(note);
 }
 
+function isReceivedAdvance(noteText) {
+  const note = normalizeKeywordText(noteText);
+  return /(^|[^a-z'])avans/.test(note) && !isPaidAdvance(note);
+}
+
 function normalizeExpensePayload(payload, fallbackNote) {
   const amount = toPositiveNumber(payload.amount);
 
@@ -476,6 +504,11 @@ function normalizeExpensePayload(payload, fallbackNote) {
   if (type === 'income' && isDebtWithoutRepayment(typeContext, fallbackNote)) {
     type = 'expense';
     category = 'Qarz';
+  }
+
+  // Olingan avans (keyingi oy maoshidan oldindan) shu oy uchun qo'shimcha kirim, chiqim emas.
+  if (type === 'expense' && isReceivedAdvance(typeContext)) {
+    type = 'income';
   }
 
   return {
@@ -503,10 +536,11 @@ function normalizeExpenseListPayload(payload, fallbackNote) {
 }
 
 function inferCategory(text) {
-  const lowerText = String(text || '').toLowerCase();
+  const lowerText = normalizeKeywordText(text);
 
+  // Kalit so'z so'z boshidan mos kelishi kerak ("nonga" -> "non"), aks holda "sartarosh" ichidagi "osh" ovqat bo'lib qoladi.
   const matched = CATEGORY_KEYWORDS.find(({ keywords }) => (
-    keywords.some((keyword) => lowerText.includes(keyword))
+    keywords.some((keyword) => new RegExp(`(^|[^a-z'])${escapeRegExp(normalizeKeywordText(keyword))}`).test(lowerText))
   ));
 
   return matched?.category || 'Boshqa';
@@ -1032,6 +1066,7 @@ async function categorizeExpense(text, options = {}) {
       '',
       "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
       '',
+      "AVANS QOIDASI: 'avans', 'avans oldim', 'avans tushdi', 'avans berishdi' -> KIRIM (keyingi oy maoshidan oldindan berilgan qo'shimcha pul). Faqat foydalanuvchi o'zi kimgadir avans to'lasa ('kvartiraga avans berdim') -> CHIQIM.",
       "QARZ QOIDASI: faqat birov qarzini foydalanuvchiga QAYTARSA ('qarzimni qaytardi', 'qarz qaytdi', 'qarzini to'ladi') bu KIRIM.",
       "'X dan qarz', 'X akadan qarz', 'X ga qarz', 'qarz oldim', 'qarzim bor', 'qarzdorman', 'qarz to'ladim', 'qarzni qaytardim' -> bu KIRIM EMAS: type='expense', category='Qarz'.",
       '',
@@ -1056,6 +1091,7 @@ async function categorizeExpense(text, options = {}) {
       "- 'sartarosh', 'salon', 'kosmetika' -> Shaxsiy parvarish",
       "- 'sayohat', 'mehmonxona', 'avia chipta' -> Sayohat",
       "- 'ofis', 'biznes', 'reklama' -> Ish va biznes",
+      "- 'kino', 'kafe', 'konsert', 'sport', 'marafon', 'fitnes', 'sport zal', 'futbol', 'hobbi' -> Ko'ngilochar (sport va hobbi Ta'lim EMAS)",
       "MUHIM: Summalar turli formatda bo'lishi mumkin: 15000, 15 ming, 1.5 mln, 15k, yoki 15 so'm.",
       "Masallar: '532000 o'qish', '466 ming payme', '750000 kvartira', '350 ming dadam', '1.5 mln avtomobil', '500k non'",
       "Faqat JSON massiv qaytar, boshqa hech narsa yozma.",
@@ -1110,7 +1146,8 @@ async function categorizeExpense(text, options = {}) {
       status: error.status || error.code
     });
 
-    if (error.code !== 'AI_TEMPORARILY_UNAVAILABLE' && localFallback) {
+    // AI band bo'lsa ham xabar yo'qolmasin: oddiy matnlar mahalliy tahlil bilan saqlanadi.
+    if (localFallback) {
       debugAi('categorizeExpense.localFallback', localFallback);
       return localFallback;
     }
@@ -1189,7 +1226,7 @@ async function categorizeVoiceExpense(fileUrl, mimeType = 'audio/ogg') {
   const prompt = [
     "Ovozli xabardagi moliyaviy operatsiyani tinglab, summa, type, kategoriya va izohni JSON formatida ajrat.",
     "Matndan bu xarajat (chiqim) yoki daromad (kirim) ekanini aniqla.",
-    "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', 'kirim', 'daromad' so'zlari.",
+    "KIRIM belgilari: 'qarzimni qaytardi', 'pul keldi', 'sovg'a berdi', 'topib oldim', 'qo'shimcha ish haqi', 'avans', 'bonus', 'kirim', 'daromad' so'zlari. 'X akadan qarz', 'qarz oldim', 'qarzimni qaytardim' - kirim EMAS, Qarz xarajati.",
     "Aks holda bu CHIQIM (xarajat) hisoblanadi.",
     "Agar KIRIM bo'lsa, type='income' va category='Kirim' deb belgila. Agar CHIQIM bo'lsa, type='expense' va ma'nosi eng yaqin kategoriyani tanla.",
     `Chiqim kategoriyalari: [${CATEGORIES.join(', ')}].`,

@@ -3132,7 +3132,10 @@ async function handleExpenseActionCallback(bot, query, user, expenseAction) {
       await editCallbackMessageText(
         bot,
         query,
-        `✅ ${getTransactionKindLabel(deletedExpense)} o'chirildi. Yangi balans: ${formatMoney(balance)}`,
+        [
+          `🗑️ ${getTransactionKindLabel(deletedExpense)} o'chirildi: ${formatTransactionAmount(deletedExpense)} (${deletedExpense.category}${deletedExpense.note ? ` — ${deletedExpense.note}` : ''})`,
+          `Yangi balans: ${formatMoney(balance)}`
+        ].join('\n'),
         { reply_markup: { inline_keyboard: [] } }
       );
     } catch (error) {
@@ -3751,8 +3754,63 @@ async function handleMessage(bot, msg) {
   }
 }
 
+// Telegram "Menu" buyruqlari asosiy tugmalar bilan bir xil oqimga yo'naltiriladi.
+const MENU_COMMAND_BUTTONS = {
+  hisobot: '📊 Hisobot',
+  maosh: '💰 Maosh',
+  tahlil: '🤖 AI Tahlil',
+  rejam: BUDGET_PLAN_BUTTON_TEXT,
+  maqsad: '🎯 Reja va Maqsad',
+  sozlamalar: '⚙️ Sozlamalar'
+};
+
+const USER_MENU_COMMANDS = [
+  { command: 'start', description: 'Botni boshlash / qayta boshlash' },
+  { command: 'hisobot', description: '📊 Oylik hisobot' },
+  { command: 'rejam', description: '📆 Rejam: ko\'rish yoki tuzish' },
+  { command: 'maosh', description: '💰 Maoshni o\'zgartirish' },
+  { command: 'tahlil', description: '🤖 AI tahlil' },
+  { command: 'maqsad', description: '🎯 Reja va Maqsad' },
+  { command: 'sozlamalar', description: '⚙️ Sozlamalar va Excel' },
+  { command: 'bekor', description: '❌ Joriy amalni bekor qilish' },
+  { command: 'help', description: 'Yordam' }
+];
+
+const ADMIN_MENU_COMMANDS = [
+  ...USER_MENU_COMMANDS,
+  { command: 'stats', description: '👥 Foydalanuvchilar statistikasi' },
+  { command: 'xabar', description: '📣 Hammaga xabar yuborish' }
+];
+
+async function registerMenuCommands(bot) {
+  try {
+    await bot.setMyCommands(USER_MENU_COMMANDS);
+    const adminId = getAdminTelegramId();
+
+    if (/^\d+$/.test(adminId)) {
+      await bot.setMyCommands(ADMIN_MENU_COMMANDS, { scope: { type: 'chat', chat_id: Number(adminId) } });
+    }
+  } catch (error) {
+    console.error('Menu buyruqlarini o\'rnatishda xato:', error.message || error);
+  }
+}
+
+async function handleMenuCommand(bot, msg, command) {
+  await handleMessage(bot, { ...msg, text: MENU_COMMAND_BUTTONS[command] });
+}
+
+async function handleCancelCommand(bot, msg) {
+  const telegramId = getTelegramId(msg.from);
+  clearUserState(telegramId);
+  expiredPlanStates.delete(String(telegramId));
+  await bot.sendMessage(getChatId(msg), 'Bekor qilindi. Xarajat yoki kirimni yozavering.', MAIN_KEYBOARD);
+}
+
 function registerHandlers(bot) {
+  registerMenuCommands(bot);
   bot.onText(/^\/start$/, (msg) => handleStart(bot, msg));
+  bot.onText(/^\/(hisobot|maosh|tahlil|rejam|maqsad|sozlamalar)(?:@\w+)?$/, (msg, match) => handleMenuCommand(bot, msg, match[1]));
+  bot.onText(/^\/bekor(?:@\w+)?$/, (msg) => handleCancelCommand(bot, msg));
   bot.onText(/^\/stats$/, (msg) => handleStatsCommand(bot, msg));
   bot.onText(/^\/(?:xabar|broadcast)$/, (msg) => handleBroadcastCommand(bot, msg));
   bot.onText(/^\/premium_narxi$/, (msg) => handlePremiumPriceCommand(bot, msg));
@@ -3761,7 +3819,16 @@ function registerHandlers(bot) {
   bot.onText(/^\/help$/, (msg) => {
     bot.sendMessage(
       msg.chat.id,
-      "Xarajat yoki kirimni yozing: 25000 nonga, 50000 qarzim qaytdi. Hisobot va tahlil uchun tugmalardan foydalaning.",
+      [
+        "Xarajat yoki kirimni oddiy matnda yozing:",
+        "• 25000 nonga",
+        "• 30000 non va 15000 metro (bir nechtasi birga)",
+        "• +500000 bonus yoki 300 ming qarzimni qaytardi (kirim)",
+        "• Hikmatillo akaga 700 ming qarz qaytardim (qarz xarajati)",
+        '',
+        'Buyruqlar: /hisobot, /rejam, /maosh, /tahlil, /maqsad, /sozlamalar, /bekor',
+        "Ovozli xabar ham yuborishingiz mumkin."
+      ].join('\n'),
       MAIN_KEYBOARD
     );
   });
