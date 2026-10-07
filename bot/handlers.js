@@ -235,7 +235,12 @@ function getAdminTelegramId() {
 }
 
 function getPaymentCardNumber() {
-  return process.env.PAYMENT_CARD_NUMBER || '8600 1234 5678 9012';
+  return String(process.env.PAYMENT_CARD_NUMBER || '').trim();
+}
+
+// Karta kiritilmagan bo'lsa to'lov qabul qilinmaydi: na karta, na chek tugmasi ko'rsatiladi.
+function isPaymentEnabled() {
+  return Boolean(getPaymentCardNumber());
 }
 
 function getPaymentPrice() {
@@ -247,6 +252,10 @@ function formatPaymentPrice() {
 }
 
 function getPaymentStartMarkup() {
+  if (!isPaymentEnabled()) {
+    return MAIN_KEYBOARD;
+  }
+
   return {
     reply_markup: {
       inline_keyboard: [
@@ -1089,8 +1098,9 @@ function buildPremiumPriceText() {
     '',
     ...buildPremiumFeatureLines(),
     '',
-    `💳 Karta: ${getPaymentCardNumber()}`,
-    "To'lovdan keyin pastdagi tugma orqali chek yuboring."
+    ...(isPaymentEnabled()
+      ? [`💳 Karta: ${getPaymentCardNumber()}`, "To'lovdan keyin pastdagi tugma orqali chek yuboring."]
+      : ["💳 Hozircha to'lov qabul qilinmaydi."])
   ].join('\n');
 }
 
@@ -3257,6 +3267,12 @@ async function handleCallback(bot, query) {
 
     if (query.data === PAYMENT_START_CALLBACK) {
       await consumeCallbackMessage(bot, query, callbackKey);
+
+      if (!isPaymentEnabled()) {
+        await bot.sendMessage(chatId, "Hozircha to'lov qabul qilinmaydi.", MAIN_KEYBOARD);
+        return;
+      }
+
       await userService.updateAwaitingPayment(user.id, true);
       await bot.sendMessage(chatId, "Chek yoki to'lov skrinshotini shu yerga yuboring.", MAIN_KEYBOARD);
       return;
