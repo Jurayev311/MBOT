@@ -105,22 +105,46 @@ async function getUserByTelegramId(telegramId) {
   return queryOne('select * from users where telegram_id = $1', [normalizedId]);
 }
 
+function isAdminTelegramId(telegramId) {
+  return String(telegramId) === String(process.env.ADMIN_TELEGRAM_ID || '').trim();
+}
+
+// Admin (bot egasi) doim muddatsiz premium bo'ladi, to'lov talab qilinmaydi.
+async function ensureAdminPremium(user) {
+  if (!user || !isAdminTelegramId(user.telegram_id)) {
+    return user;
+  }
+
+  if (user.is_premium && !user.premium_expires_at && user.daily_limit >= 50 && user.daily_voice_limit >= 10) {
+    return user;
+  }
+
+  return updateUserById(user.id, {
+    is_premium: true,
+    daily_limit: Math.max(50, Number(user.daily_limit || 0)),
+    daily_voice_limit: Math.max(10, Number(user.daily_voice_limit || 0)),
+    premium_expires_at: null,
+    awaiting_payment: false
+  });
+}
+
 async function ensureUser(from) {
   const telegramId = normalizeTelegramId(from.id);
   const existingUser = await getUserByTelegramId(telegramId);
 
   if (existingUser) {
-    return existingUser;
+    return ensureAdminPremium(existingUser);
   }
 
   try {
-    return await queryOne(
+    const createdUser = await queryOne(
       'insert into users (telegram_id, current_month) values ($1, $2) returning *',
       [telegramId, getMonthKey()]
     );
+    return ensureAdminPremium(createdUser);
   } catch (error) {
     if (error.code === '23505') {
-      return getUserByTelegramId(telegramId);
+      return ensureAdminPremium(await getUserByTelegramId(telegramId));
     }
 
     throw error;

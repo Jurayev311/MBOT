@@ -461,11 +461,17 @@ function parseBudgetPlanManageCallback(data) {
     }
   }
 
+  // "budget_manage_delete_" prefiksi confirm/cancel tugmalariga ham mos keladi, shuning uchun
+  // faqat to'g'ridan-to'g'ri Telegram ID kelgan holat o'chirish so'rovi hisoblanadi.
   if (value.startsWith(BUDGET_PLAN_MANAGE_DELETE_PREFIX)) {
-    return {
-      action: 'delete',
-      telegramId: value.slice(BUDGET_PLAN_MANAGE_DELETE_PREFIX.length)
-    };
+    const telegramId = value.slice(BUDGET_PLAN_MANAGE_DELETE_PREFIX.length);
+
+    if (/^\d+$/.test(telegramId)) {
+      return {
+        action: 'delete',
+        telegramId
+      };
+    }
   }
 
   return null;
@@ -1189,8 +1195,12 @@ function buildSettingsText(user, todayExpenseCount) {
       '⚙️ Sozlamalar',
       '',
       '💎 Status: Premium',
-      `📅 Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`,
-      `⏳ Qolgan kunlar: ${formatRemainingDays(user.premium_expires_at)}`,
+      ...(user.premium_expires_at
+        ? [
+          `📅 Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`,
+          `⏳ Qolgan kunlar: ${formatRemainingDays(user.premium_expires_at)}`
+        ]
+        : ['📅 Muddat: cheksiz']),
       `📊 Bugun: ${todayExpenseCount}/${dailyLimit}`,
       `📥 Excel eksport: ${EXCEL_EXPORT_LIMIT_COST} ta limit`,
       '',
@@ -1673,6 +1683,9 @@ async function handleStart(bot, msg) {
   try {
     const user = await userService.ensureUser(msg.from);
     const telegramId = getTelegramId(msg.from);
+
+    // /start har doim toza boshlaydi: yarim qolgan reja, maosh yoki tahrir jarayoni bekor qilinadi.
+    clearUserState(telegramId);
 
     if (!hasFullName(user)) {
       setUserState(telegramId, 'awaiting_start_name');
@@ -2919,7 +2932,9 @@ async function handlePremiumPriceCommand(bot, msg) {
     if (user?.is_premium) {
       await bot.sendMessage(
         chatId,
-        `Siz allaqachon premium foydalanuvchisiz! Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`,
+        user.premium_expires_at
+          ? `Siz allaqachon premium foydalanuvchisiz! Tugash sanasi: ${formatDateOnly(user.premium_expires_at)}`
+          : 'Siz allaqachon premium foydalanuvchisiz! Muddat: cheksiz.',
         MAIN_KEYBOARD
       );
       return;
@@ -3201,7 +3216,16 @@ async function handleCallback(bot, query) {
 
       if (budgetPlanCallback.action === 'skip') {
         clearUserState(telegramId);
-        await bot.sendMessage(chatId, "Mayli, rejasiz davom etamiz. Xarajat yoki kirimni yozavering.", MAIN_KEYBOARD);
+        await bot.sendMessage(
+          chatId,
+          [
+            'Mayli, rejasiz davom etamiz. Xarajat yoki kirimni yozavering.',
+            'Masalan: 25000 nonga',
+            '',
+            `Reja kerak bo'lsa, istalgan vaqt "${BUDGET_PLAN_BUTTON_TEXT}" tugmasini bosing.`
+          ].join('\n'),
+          MAIN_KEYBOARD
+        );
         return;
       }
 
